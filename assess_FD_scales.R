@@ -1,6 +1,6 @@
 ## This script assess the variation in traits and diversity across spatial scales for the NC Lichen FD project
 
-git_dir = 'C:/Users/jrcoyle/Documents/UNC/Projects/Lichen Functional Diversity/Analysis/GitHub/'
+git_dir = 'C:/Users/jrcoyle/Documents/UNC/Projects/Lichen Functional Diversity/Analysis/GitHub/NC-forest-lichens/'
 
 # Load data & make data frames for analysis
 source(paste(git_dir, 'load_data.R', sep=''))
@@ -18,7 +18,8 @@ lichens_pm = droplevels(lichens_pm)
 ## Define variables used for variation partitioning in each section
 # Choice of regional variables based on correlations between plot level climate variables:
 # Strong correlation between Elevation, humidity and temperature, elevation least correlated with AP and CloudFreq_sd
-locvars = c('Angle','Bryophytes','Shedding','FurrowDepth','pH','Density','WaterCapacity','DBH','Trans_tot_cor')
+sampvars = c('Angle','Bryophytes','Shedding','FurrowDepth','pH','Density','WaterCapacity')
+treevars = c('DBH','Trans_tot_cor')
 regvars = c('Elevation','CloudFreq_sd','AP','OpenPos','Soil_pH')
 
 
@@ -89,7 +90,7 @@ samples = merge(samples, tree_derived, all.x=T)
 rownames(samples) = samples$SampID
 
 trees = merge(tree_data, tree_derived, all.x=T)
-trees = merge(trees, plot_data[,c('PlotID','SiteID','Ecoregion','TopoPos')], all.x=T)
+trees = merge(trees, plot_data, all.x=T)
 rownames(trees) = trees$TreeID
 
 # Re-subset piedmont and mountains samples
@@ -429,11 +430,16 @@ dev.off()
 #############################
 ### Variance Partitioning ###
 
-
-# Define data
-use_y = samples_pm$Rich_S + 1# Rich_M, Rich_S, Tot_abun_cor, Avg_abun
+# Sample-scale response
+use_y = samples_pm$Avg_abun #+ 1# Rich_M, Rich_S, Tot_abun_cor, Avg_abun
 #use_y = FD[rownames(samples_pm), 'rao_L2_s.5'] # Read in below in FD section
+locvars = c(sampvars, treevars)
 use_data = samples_pm[,c(locvars, regvars)]
+
+# Tree-scale response
+use_y = trees_pm$Avg_abun_tree #+ 1 # Rich_S_tree, Rich_M_tree, Tot_abun_tree_cor, Avg_abun_tree
+locvars = treevars
+use_data = trees_pm[,c(locvars, regvars)]
 
 # Remove observations with missing values
 missing = rowSums(is.na(use_data)|is.na(use_y))>0
@@ -462,6 +468,13 @@ varpart_richM = partvar2(R2s)
 varpart_totabun = partvar2(R2s)
 varpart_avgabun = partvar2(R2s)
 varpart_fd = partvar2(R2s)
+
+varpart_richS_tree = partvar2(R2s)
+varpart_richM_tree = partvar2(R2s)
+varpart_totabun_tree = partvar2(R2s)
+varpart_avgabun_tree = partvar2(R2s)
+
+
 
 #################################################################
 ### Variation in morphotypes (equivalent to variation in species composition)
@@ -576,20 +589,21 @@ vp = varpart(sampXpcoa, ~TopoPos, ~Ecoregion, data=samples[rownames(comm),])
 ## Local-Regional Variance Decompostion
 use_data = samples_pm[,c(locvars, regvars)]
 
+# Put in same order: omits samples without lichens
+use_data = use_data[rownames(use_pcoa),]
+
 # Remove observations with missing values
 missing = rowSums(is.na(use_data))>0
 use_data = use_data[!missing,]
-use_pcoa = sampXpcoa[!missing[rownames(sampXpcoa)],]
-
-# Put in same order: omits samples without lichesn
-use_data = use_data[rownames(use_pcoa),]
+use_pcoa = sampXpcoa[!missing,]
 
 # Model ordered data as integers
 for(i in 1:ncol(use_data)){
 	if(is.ordered(use_data[,i])) use_data[,i] = unclass(use_data[,i])
+	use_data[,i] = as.numeric(use_data[,i])
 }
 
-vp_locreg = varpart(use_pcoa, use_data[,locvars], use_data[,regvars])
+vp_locreg = varpart(use_pcoa, as.matrix(use_data[,locvars]), use_data[,regvars])
 varpart_CompM = vp_locreg$part$indfract[,'Adj.R.squared']
 
 # Combine and plot
@@ -601,6 +615,13 @@ barplot(varpart, legend.text = c('Plot/Site','Both','Sample/Tree'), las=1, ylim=
 	args.legend=list(x='topleft', bty='n'), ylab='Variation Explained')
 dev.off()
 
+write.csv(varpart, './Figures/local reg varpart.csv')
+
+# Write out table of R2
+Local = varpart[1,]+varpart[2,]
+Regional = varpart[3,]+varpart[2,]
+All = colSums(varpart)
+write.csv(data.frame(Local, Regional, All), './Figures/local regional R2.csv')
 
 #################################################################
 ### Variation in single traits
