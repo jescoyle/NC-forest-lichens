@@ -3,8 +3,7 @@
 options(stringsAsFactors=F)
 
 # Load functions
-source('C:/Users/jrcoyle/Documents/UNC/Projects/Lichen Functional Diversity/Analysis/GitHub/lichen_FD_functions.R')
-
+source('C:/Users/jrcoyle/Documents/UNC/Projects/Lichen Functional Diversity/Analysis/GitHub/NC-forest-lichens/lichen_FD_functions.R')
 
 # Define data locations
 mydir = 'C://Users/jrcoyle/Documents/UNC/Projects/Lichen Functional Diversity/Analysis/'
@@ -27,50 +26,60 @@ lichens = read.csv(paste(sql_dir,'lichens.csv', sep=''))
 # Assess light bias associated with increasing light levels at dawn
 treedata = merge(trees, canopy)
 
-# Subset to plots for analysis
-use_treedata = subset(treedata, PlotID!='Bladen1')
-use_plots = subset(plots, PlotID!='Bladen1')
-
 # Make date into date class
-use_treedata$Date_time = as.POSIXlt(use_treedata$Date_time)
+treedata$Date_time = as.POSIXlt(treedata$Date_time)
 
-yvars = c('Pct_open','LAI_75deg','Trans_tot')
-syms = expand.grid(pch=c(1,16),col=rainbow(9))
-rownames(syms) = use_plots$PlotID[order(use_plots$PairID)]
+# Plot how light variables are affected by EV difference from reference
+yvars = c('Canopy_open','Trans_tot')
+syms = expand.grid(pch=c(1,16),col=rainbow(10))
+syms = syms[1:19,]
+rownames(syms) = plots$PlotID[order(plots$PairID, decreasing=T)]
 
-par(mfrow=c(1,3))
+par(mfrow=c(1,length(yvars)))
 for(y in yvars){
-	plot(use_treedata[,y]~EVdif, data=use_treedata, ylab=y, 
-		pch=syms[use_treedata$PlotID,'pch'], col=syms[use_treedata$PlotID, 'col'])
+	plot(treedata[,y]~EVdif, data=treedata, ylab=y, 
+		pch=syms[treedata$PlotID,'pch'], col=syms[treedata$PlotID, 'col'])
 }
 
-plot(Pct_open~Trans_tot, data=use_treedata, pch=syms[use_treedata$PlotID,'pch'], col=syms[use_treedata$PlotID, 'col'])
-plot(LAI_75deg~LAI_60deg, data=use_treedata)
+plot(Canopy_open~Trans_tot, data=treedata, pch=syms[treedata$PlotID,'pch'], col=syms[treedata$PlotID, 'col'])
 
-pdf('./Figures/Dependence of light on camera EVdif.pdf', height=4, width=10.5)
+pdf('./Figures/Dependence of light on camera EVdif.pdf', height=4, width=8)
 for(p in rownames(syms)){
-	use_trees = subset(use_treedata, PlotID==p)
-	par(mfrow=c(1,3))
+	use_trees = subset(treedata, PlotID==p)
+	par(mfrow=c(1,2))
 	for(y in yvars){
 		plot(use_trees[,y]~EVdif, data=use_trees, ylab=y, main=p)
 	}
 }
 dev.off()
-plot(EVdif~I(Date_time$hour+Date_time$min/60), data=use_treedata)
+
+plot(EVdif~I(Date_time$hour+Date_time$min/60), data=treedata)
 
 # Detrend Trans_tot based on EVdif assumming same relationship between EVdif and Trans_tot across sites
 trans_mod = lm(Trans_tot~EVdif, data=treedata)
+plot(Trans_tot~EVdif, data=treedata); abline(trans_mod)
 
-treedata$Trans_tot_cor = NA
-treedata[names(resid(trans_mod)),'Trans_tot_cor'] = resid(trans_mod)
+treedata$Trans_tot_cor = resid(trans_mod)
 
-plot(Trans_tot_cor~EVdif, data=treedata)
-plot(Trans_tot_cor~ISO, data=treedata)
+open_mod = lm(Canopy_open~EVdif, data=treedata)
+plot(Canopy_open~EVdif, data=treedata); abline(open_mod)
 
-plot(Trans_tot_cor~factor(TreeTaxonID), data=treedata)
-plot(Trans_tot_cor~factor(PlotID), data=treedata, las=3)
+treedata$Canopy_open_cor = resid(open_mod)
 
-keep_cols = c('PlotID','TreeTaxonID','Module','DBH','UncertainID', 'Trans_tot_cor')
+par(mfrow=c(1,2))
+plot(Trans_tot~Canopy_open, data=treedata)
+plot(Trans_tot_cor~Canopy_open_cor, data=treedata)
+
+# Transmission of light below different tree species
+meds = with(treedata, tapply(Trans_tot_cor, TreeTaxonID, median))
+plot_order = names(meds[order(meds)])
+par(mar=c(10,3,1,1))
+plot(Trans_tot_cor~factor(TreeTaxonID, levels=plot_order), data=treedata, las=2, xlab='')
+
+# Light differeces across plots
+plot(Trans_tot_cor~factor(PlotID), data=treedata, las=2, xlab='')
+
+keep_cols = c('PlotID','TreeTaxonID','Module','DBH','UncertainID', 'Trans_tot_cor','Canopy_open_cor')
 rownames(treedata) = treedata$TreeID
 
 write.csv(treedata[,keep_cols], paste(derive_dir,'treedata.csv', sep=''), row.names=T)
