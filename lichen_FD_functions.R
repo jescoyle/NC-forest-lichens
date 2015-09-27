@@ -112,6 +112,7 @@ calc_z = function(x, null){
 calc_fixedvar = function(x){
 	var(as.numeric(as.vector(fixef(x)) %*% t(model.matrix(x))))
 }
+
 # A function that extracts all variance components from a lmm model
 get_allvar = function(x){
 	var_df = data.frame(VarCorr(x))
@@ -122,6 +123,8 @@ get_allvar = function(x){
 
 # A function to calculate total variance from a glmm
 # Note that function r.squaredGLMM(x) in MuMIn now does this R2 calculation
+# If using glmm with poisson, make sure that dummy variable with 1 level for each observation is included as random intercept
+#	> This is how residual var is incorporated into sigma.random
 calc_totvar = function(mod){
 
 
@@ -137,8 +140,13 @@ calc_totvar = function(mod){
 		family = mod@resp$family$family
 		link = mod@resp$family$link
 
-		if(family=='poisson'&link=='log') sigma.mod = log(1 + (1/exp(as.numeric(fixef(mod_null)))))
-		if(family=='binomial'&link=='logit') sigma.mod = (pi^2)/3
+		if(family=='poisson'&link=='log'){
+			sigma.mod = log(1 + (1/exp(as.numeric(fixef(mod_null)))))
+		}
+		
+		if(family=='binomial'&link=='logit'){
+			sigma.mod = (pi^2)/3
+		}
 	}
 
 	if(class(mod)=='lmerMod'){
@@ -146,9 +154,9 @@ calc_totvar = function(mod){
 	}
 
 	sigma.fixed = calc_fixedvar(mod)
-	sigma.random = sum(data.frame(VarCorr(mod))$vcov)
+	sigma.random = sum(data.frame(VarCorr(mod))$vcov) + ifelse(class(mod)=='lmerMod', attr(VarCorr(mod), 'sc')^2,0)
 	
-	sigma.total = sigma.fixed + sigma.random + sigma.mod
+	sigma.total = sigma.fixed + sigma.random + sigma.mod # Error is incorporated into sigma.random term
 	sigma.total
 }
 

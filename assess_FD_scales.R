@@ -14,6 +14,7 @@ samples_pm = subset(samples, SiteID!='Bladen')
 samples_pm = droplevels(samples_pm)
 lichens_pm = subset(lichens, SiteID!='Bladen')
 lichens_pm = droplevels(lichens_pm)
+plots_pm = subset(plot_data, PlotID!='Bladen1')
 
 ## Define variables used for variation partitioning in each section
 # Choice of regional variables based on correlations between plot level climate variables:
@@ -154,6 +155,78 @@ boxplot(trees_pm$Tot_abun_cor~factor(trees_pm$PlotID, levels=ordered_plots),
 abline(h=mean(trees_pm$Tot_abun_cor), col=2)
 dev.off()
 
+
+## Manuscript Figure: boxplots of Tot_abun_cor, Rich_M, FD across plots
+# Calculate elevation means
+pairids = unique(plots_pm$PairID)
+elev_means = with(plots_pm, tapply(Elevation, PairID, mean))
+
+# Define plot order based on elevation and topographi position
+pair_order = names(elev_means)[order(elev_means)]
+plots_pm$PairID = factor(plots_pm$PairID, levels=pair_order)
+plots_pm$TopoPos = factor(plots_pm$TopoPos, levels=c('sheltered','exposed'))
+use_op = plots_pm[with(plots_pm, order(PairID, TopoPos)), 'PlotID']
+
+# Define x-axis labels for plots
+xlabels = sapply(1:length(elev_means), function(i){
+	paste(pair_order[i], '\n', round(elev_means[pair_order[i]],0), 'm', sep='')
+})
+
+# Define colors
+use_lcol = c('black','grey50')
+use_col = c('grey80','white')
+use_fact = plots_pm[use_op,'TopoPos']
+
+# Calculate means across ecoregions and topo pos.
+means = with(samples_pm, aggregate(samples_pm[,c('Tot_abun_cor','Rich_M','rao_L2_s.5')], list(Ecoregion, TopoPos),
+	FUN=function(x) mean(x, na.rm=T)))
+colnames(means)[1:2] = c('Ecogregion','TopoPos')
+
+# Define expression with plot labels
+varnames = c('F[TOT]','R[M]','FD')
+names(varnames) = c('Tot_abun_cor','Rich_M','rao_L2_s.5')
+
+# Loop through response variables
+svg('./Figures/Community metrics across plots.svg', height = 6, width=4)
+par(mfrow=c(3,1))
+par(lend=1)
+i = 1
+for(y in c('Tot_abun_cor','Rich_M','rao_L2_s.5')){
+
+	par(mar=c(1+i,5,3-i,1))
+	
+	boxplot(samples_pm[,y] ~ factor(samples_pm$PlotID, levels=use_op), 
+		ylab=parse(text=varnames[y]), axes=F, border=use_lcol[use_fact], col=use_col[use_fact])
+	axis(2, las=2); box()
+	
+	mtext(c('A','B','C')[i], 3, 0, adj=-0.07)
+	segments(rep(c(8.5, 0.5), 2),  means[,y], rep(c(18.5, 8.5), 2),  means[,y], lwd=3, col=use_lcol[rep(1:2, each=2)])
+	
+	if(i==3){
+		usr = par('usr')
+		axis(1, at=seq(2, 18, 2)-.5, labels = pair_order, tick=F, line=1.5)
+		axis(1, at=1:18, labels=round(plots_pm[use_op,'Elevation'], 0),
+			tick=F, line=-.5, las=2)
+		par(xpd = NA)
+		text(usr[1]+.7, usr[3]-0.025, 'Elevation (m):', pos=2)
+		text(usr[1]+.7, usr[3]-0.065,'Site:', pos=2)
+		par(xpd = F)
+	}
+	
+	i = i + 1
+}
+dev.off()
+
+
+## FD vs Rich_M
+par(mfrow=c(1,2))
+for(i in c('Piedmont','Mountains')){
+	use_data = subset(samples_pm, Ecoregion==i)
+	plot(rao_L2_s.5 ~ Rich_M, data=use_data, xlim=c(0,17), ylim=c(0, 0.25),
+		pch=21, bg = use_col[use_data$TopoPos], las=1)
+}
+
+
 ## Morphotypes shared between plots
 
 # Piedmont vs Mountains
@@ -191,7 +264,7 @@ length(intersect(intersect(colnames(coast_morphs), colnames(pied_morphs)), colna
 library(lme4)
 library(MuMIn)
 
-use_y = samples_pm$Avg_abun + 1 # Rich_M, Rich_S, Tot_abun_cor, 
+use_y = samples_pm$Rich_S + 1 # Go through all community metrics
 
 hist(use_y)
 hist(log(use_y))
@@ -203,6 +276,47 @@ means = with(samples_pm, tapply(use_y, PlotID, mean))
 plot(means, vars); abline(0,1)
 abline(lm(vars~means-1), col=2)
 lm(vars~means-1)
+
+## Fit scale models for each community response metric- save all together in an array
+
+comm_mets = c('Rich_S','Rich_M','Tot_abun_cor','Avg_abun','rao_L2_s.5')
+scale_mods = array(NA, dim=c(length(comm_mets), 4, 5), 
+	dimnames=list(Metric=comm_mets, Model=c('Tree','Plot','Site','Ecoregion'), Statistic=c('focal_R2','control_R2','residual_R2','deviance'))
+)
+
+samples_pm$SampID = factor(samples_pm$SampID)
+
+for(i in comm_mets){
+	use_y = samples_pm[,i] + ifelse(i=='rao_L2_s.5', 0, 1)
+
+	if(i %in% c('Rich_S','Rich_M','Tot_abun_cor')){
+		mod_tree = glmer(use_y ~ 1 + (1|PlotID/TreeID) + (1|SampID), data=samples_pm, family='poisson')
+		mod_plot = glmer(use_y ~ 1 + (1|SiteID/PlotID) + (1|SampID), data=samples_pm, family='poisson')
+		mod_site = glmer(use_y ~ 1 + (1|SiteID)+ (1|SampID) + Ecoregion, data=samples_pm, family='poisson')
+		mod_eco = glm(use_y ~ Ecoregion, data=samples_pm, family='poisson')
+	}
+	if(i %in% c('Avg_abun','rao_L2_s.5')){
+		mod_tree = lmer(use_y ~ 1 + (1|PlotID/TreeID), data=samples_pm)
+		mod_plot = lmer(use_y ~ 1 + (1|SiteID/PlotID), data=samples_pm)
+		mod_site = lmer(use_y ~ 1 + (1|SiteID) + Ecoregion, data=samples_pm)
+		mod_eco = glm(use_y ~ Ecoregion, data=samples_pm, family='gaussian')
+	}
+
+	# Calculate R2 components
+	scale_mods[i,'Tree',c('focal_R2','control_R2')] = (get_allvar(mod_tree)/calc_totvar(mod_tree))[3:4]
+	
+
+calc_totvar(mod_tree)
+data.frame(VarCorr(mod_tree))$vcov
+	
+	components = sapply(list(mod_tree, mod_plot, mod_site), function(x) data.frame(VarCorr(x))$vcov[1]/calc_totvar(x))
+	components = c(components, attr(r.squaredLR(mod_eco), 'adj.r.squared'))
+	names(components) = c('Tree','Plot','Site','Ecoregion')
+
+
+
+
+## Do models one at a time to make plots:
 
 # Effects of ecoregion and topographic position
 mod_inter = glmer(use_y ~ 1 + Ecoregion*TopoPos + (1|SiteID) + (1|TreeID) , data = samples_pm, family='poisson')
@@ -991,22 +1105,7 @@ write.csv(trait_mods_df, './Figures/variation in traits across scales.csv', row.
 #################################################################
 ### Variation in multi-trait FD
 
-## Load FD data caclulated in script: multi_trait_models.R
-null_fd_dir = 'C:/Users/jrcoyle/Documents/UNC/Projects/Lichen Functional Diversity/Analysis/Data/FD NUll Sims/'
-
-FD = read.csv('./Data/raos_q_samples.csv')
-rownames(FD) = FD$SampID
-load(paste(null_fd_dir,'FD_scaled.RData', sep=''))
-
-# FD calculated on reproductve traits
-FD_rep = read.csv('./Data/raos_q_reproductive_traits_samples.csv')
-rownames(FD_rep) = FD_rep$SampID
-load(paste(null_fd_dir,'FD_rep_scaled.RData', sep=''))
-
-# Subset to top 2 samples on each tree
-FD = FD[use_top2,]
-FD_rep = FD_rep[use_top2,]
-
+## FD data already loaded by load_data.R script
 
 ## Variation in FD across sites and plots
 #FD = FD_rep
