@@ -31,6 +31,19 @@ plot_data = read.csv(paste(derive_dir, 'plot_data.csv', sep=''), row.names=1)
 # Trait info
 traitdf = read.csv('trait_levels.csv')
 
+
+# Functional Diversity (FD)
+null_fd_dir = 'C:/Users/jrcoyle/Documents/UNC/Projects/Lichen Functional Diversity/Analysis/Data/FD NUll Sims/'
+FD = read.csv('./Data/raos_q_samples.csv')
+rownames(FD) = FD$SampID
+load(paste(null_fd_dir,'FD_scaled.RData', sep=''))
+
+# FD calculated on reproductve traits
+FD_rep = read.csv('./Data/raos_q_reproductive_traits_samples.csv')
+rownames(FD_rep) = FD_rep$SampID
+load(paste(null_fd_dir,'FD_rep_scaled.RData', sep=''))
+
+
 ## Make data frame for analysis
 lichens = lichen_data
 
@@ -48,6 +61,7 @@ plot_data$SiteID = substr(plot_data$PlotID, 1, nchar(plot_data$PlotID)-1)
 
 # Make sample data frame for analysis
 samples = samp_data
+samples = merge(samples, FD, all.x = T)
 samples = merge(samples, tree_data)
 samples = merge(samples, plot_data)
 rownames(samples) = samples$SampID
@@ -62,7 +76,8 @@ top2 = as.vector(top2)
 
 samples = subset(samples, SampID %in% top2)
 lichens = subset(lichens, SampID %in% top2)
-
+FD = FD[use_top2,]
+FD_rep = FD_rep[use_top2,]
 
 # For morphotype data, only use top2 samples with lichens
 morphos = morphos[,colnames(morphos)!='MorphID']
