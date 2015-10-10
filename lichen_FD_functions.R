@@ -108,9 +108,15 @@ calc_z = function(x, null){
 }
 
 
-# A function that calculated the fixed effects variance of a lmm model
+# A function that calculated the fixed effects variance of a lmm or lm model
 calc_fixedvar = function(x){
-	var(as.numeric(as.vector(fixef(x)) %*% t(model.matrix(x))))
+	if(class(x)=='glmerMod' | class(x)=='lmerMod'){
+		fixed.var = var(as.numeric(as.vector(fixef(x)) %*% t(model.matrix(x))))
+	}
+	if('lm' %in% class(x)){
+		fixed.var = var(as.numeric(as.vector(coef(x)) %*% t(model.matrix(x))))
+	}
+	fixed.var	
 }
 
 # A function that extracts all variance components from a lmm model
@@ -121,43 +127,60 @@ get_allvar = function(x){
 	varcomps
 }
 
-# A function to calculate total variance from a glmm
-# Note that function r.squaredGLMM(x) in MuMIn now does this R2 calculation
-# If using glmm with poisson, make sure that dummy variable with 1 level for each observation is included as random intercept
-#	> This is how residual var is incorporated into sigma.random
-calc_totvar = function(mod){
+# A function to calculates repeatability from a mixed effects model
+# > based on equations in Nakagawa & Schielzeth 2010, Biological Reviews 85: 936-956
+# Assumes models have been fit with additive overdispersion
+# Can also calculate adjusted repeatability
+# mod : fitted model object
+# focalID : character name of random effect to test
+# obsID : character name of random effect whose variance gives additive error variance
+# adjID  : character vector of random and fixed effects to be controlled for before calculating R
+calc_rpt = function(mod, focalID, adjID=NA, obsID){
 
+	if(class(mod)=='lmerMod'){
+		sigma.mod = 0
+	} else {
 
-	if(class(mod)=='glmerMod'){
-		# Drop fixed effects to get null model
+		# Drop fixed effects to get null model for calculating distribution specific variance of log link
 		mod_null = mod
 		drop.terms = attr(terms(mod), 'term.labels')
 		if(length(drop.terms)>0){
 			drop.form = paste('.~.-', paste(drop.terms, collapse='-'), sep='')
-			mod_null = update(mod, drop.form, data=mod$model)
+			mod_null = update(mod, drop.form) #, data=mod@frame)
 		}
 
-		family = mod@resp$family$family
-		link = mod@resp$family$link
+		# If model is not Gaussian, get family and link function for calculating distribution specific variance
+		if(class(mod)=='glmerMod'){
+			family = mod@resp$family$family
+			link = mod@resp$family$link
+		}
+		if('glm' %in% class(mod)){
+			family = mod$family$family
+			link = mod$family$link
+		}
 
 		if(family=='poisson'&link=='log'){
-			sigma.mod = log(1 + (1/exp(as.numeric(fixef(mod_null)))))
+			if(class(mod)=='glmerMod') sigma.mod = log(1 + (1/exp(as.numeric(fixef(mod_null)))))
+			if(class(mod)=='glm') sigma.mod = log(1 + (1/exp(as.numeric(coef(mod_null)))))
 		}
-		
-		if(family=='binomial'&link=='logit'){
-			sigma.mod = (pi^2)/3
-		}
+		if(family=='poisson'&link=='sqrt') sigma.mod = 0.25
+		if(family=='binomial'&link=='logit') sigma.mod = (pi^2)/3
+		if(family=='gaussian'&link=='identity') sigma.mod = 0
 	}
 
-	if(class(mod)=='lmerMod'){
-		sigma.mod = 0
-	}
+	all.var = get_allvar(mod)
+	R.focal = all.var[focalID]/(sum(all.var) + sigma.mod)
 
-	sigma.fixed = calc_fixedvar(mod)
-	sigma.random = sum(data.frame(VarCorr(mod))$vcov) + ifelse(class(mod)=='lmerMod', attr(VarCorr(mod), 'sc')^2,0)
+	if(!is.na(adjID)){
+		R.focal.adj = all.var[focalID]/(sum(all.var[c(focalID,obsID)]) + sigma.mod)
+		R.adj = sum(all.var[adjID])/(sum(all.var) + sigma.mod)
+		R.adj.focal = sum(all.var[adjID])/(sum(all.var[c(adjID,obsID)]) + sigma.mod)
+
+		data.frame(R.focal, R.focal.adj, R.adj, R.adj.focal)
+	} else {
+		R.focal
+	}
 	
-	sigma.total = sigma.fixed + sigma.random + sigma.mod # Error is incorporated into sigma.random term
-	sigma.total
 }
 
 

@@ -21,8 +21,12 @@ plots_pm = subset(plot_data, PlotID!='Bladen1')
 # Strong correlation between Elevation, humidity and temperature, elevation least correlated with AP and CloudFreq_sd
 sampvars = c('Angle','Bryophytes','Shedding','FurrowDepth','pH','Density','WaterCapacity')
 treevars = c('DBH','Trans_tot_cor')
+locvars = c(sampvars, treevars)
 regvars = c('Elevation','CloudFreq_sd','AP','OpenPos','Soil_pH')
 
+
+# Load repeatability statistics arrays generated later in script
+load('repeatability_statistic_arrays.RData')
 
 
 #################################################################
@@ -97,6 +101,8 @@ rownames(trees) = trees$TreeID
 # Re-subset piedmont and mountains samples
 samples_pm = subset(samples, SiteID!='Bladen')
 trees_pm = subset(trees, SiteID!='Bladen')
+samples_pm = droplevels(samples_pm)
+trees_pm = droplevels(trees_pm)
 
 pdf('./Figures/Diversity across plots.pdf', height=6, width=4.5)
 par(mfrow=c(2,1))
@@ -156,7 +162,7 @@ abline(h=mean(trees_pm$Tot_abun_cor), col=2)
 dev.off()
 
 
-## Manuscript Figure: boxplots of Tot_abun_cor, Rich_M, FD across plots
+## Manuscript Figure 3: boxplots of Tot_abun_cor, Rich_M, FD across plots
 # Calculate elevation means
 pairids = unique(plots_pm$PairID)
 elev_means = with(plots_pm, tapply(Elevation, PairID, mean))
@@ -182,6 +188,17 @@ means = with(samples_pm, aggregate(samples_pm[,c('Tot_abun_cor','Rich_M','rao_L2
 	FUN=function(x) mean(x, na.rm=T)))
 colnames(means)[1:2] = c('Ecogregion','TopoPos')
 
+# Calculate P-values for interaction using LR test
+pvals = sapply(c('Tot_abun_cor','Rich_M','rao_L2_s.5'), function(y){
+	use_fam = ifelse(y=='rao_L2_s.5', 'gaussian','poisson')
+	use_y = samples_pm[,y] + ifelse(use_fam=='gaussian', 0, 1)
+	mod_inter = glm(use_y ~ Ecoregion*TopoPos, data=samples_pm, family=use_fam)
+	mod_full = glm(use_y ~ Ecoregion + TopoPos, data=samples_pm, family=use_fam)
+	LRtest = anova(mod_full, mod_inter, test='Chisq')
+	LRtest[2,'Pr(>Chi)']
+})
+# Add these by hand later to control formatting.
+
 # Define expression with plot labels
 varnames = c('F[TOT]','R[M]','FD')
 names(varnames) = c('Tot_abun_cor','Rich_M','rao_L2_s.5')
@@ -192,16 +209,21 @@ par(mfrow=c(3,1))
 par(lend=1)
 i = 1
 for(y in c('Tot_abun_cor','Rich_M','rao_L2_s.5')){
-
+	# Set margins
 	par(mar=c(1+i,5,3-i,1))
 	
+	# Add boxplots
 	boxplot(samples_pm[,y] ~ factor(samples_pm$PlotID, levels=use_op), 
 		ylab=parse(text=varnames[y]), axes=F, border=use_lcol[use_fact], col=use_col[use_fact])
 	axis(2, las=2); box()
 	
+	# Add panel label
 	mtext(c('A','B','C')[i], 3, 0, adj=-0.07)
+	
+	# Add group means
 	segments(rep(c(8.5, 0.5), 2),  means[,y], rep(c(18.5, 8.5), 2),  means[,y], lwd=3, col=use_lcol[rep(1:2, each=2)])
 	
+	# Add x-axis labels if this is the last panel
 	if(i==3){
 		usr = par('usr')
 		axis(1, at=seq(2, 18, 2)-.5, labels = pair_order, tick=F, line=1.5)
@@ -263,6 +285,7 @@ length(intersect(intersect(colnames(coast_morphs), colnames(pied_morphs)), colna
 ## Variation in sample-level morphotype/morphospecies richness across scales
 library(lme4)
 library(MuMIn)
+library(rptR) # estimation of repeatbility: Nakagawa & Schielzeth 2010, Biological Reviews 85: 936-956
 
 use_y = samples_pm$Rich_S + 1 # Go through all community metrics
 
@@ -278,40 +301,140 @@ abline(lm(vars~means-1), col=2)
 lm(vars~means-1)
 
 ## Fit scale models for each community response metric- save all together in an array
+#samples_pm$TreeID = factor(samples_pm$TreeID)
+#samples_pm$PairID = factor(samples_pm$PairID)
+#samples_pm$SiteID = factor(samples_pm$SiteID)
+#samples_pm$Ecoregion = factor(samples_pm$Ecoregion)
+
+## Will calculate repeatability on sqrt link scale so the variance is de-coupled from mean and can compare across comm metrics
+samples_pm$SampID = factor(samples_pm$SampID)
 
 comm_mets = c('Rich_S','Rich_M','Tot_abun_cor','Avg_abun','rao_L2_s.5')
-scale_mods = array(NA, dim=c(length(comm_mets), 4, 5), 
-	dimnames=list(Metric=comm_mets, Model=c('Tree','Plot','Site','Ecoregion'), Statistic=c('focal_R2','control_R2','residual_R2','deviance'))
+scales = c('Tree','Plot','Site','Region')
+scale_rpt = array(NA, dim=c(length(comm_mets), length(scales), 5), 
+	dimnames=list(Metric=comm_mets, Model=scales, Statistic = c('R.focal','R.focal.adj','R.adj','R.adj.focal','R.residual'))
 )
-
-samples_pm$SampID = factor(samples_pm$SampID)
 
 for(i in comm_mets){
 	use_y = samples_pm[,i] + ifelse(i=='rao_L2_s.5', 0, 1)
 
 	if(i %in% c('Rich_S','Rich_M','Tot_abun_cor')){
-		mod_tree = glmer(use_y ~ 1 + (1|PlotID/TreeID) + (1|SampID), data=samples_pm, family='poisson')
-		mod_plot = glmer(use_y ~ 1 + (1|SiteID/PlotID) + (1|SampID), data=samples_pm, family='poisson')
-		mod_site = glmer(use_y ~ 1 + (1|SiteID)+ (1|SampID) + Ecoregion, data=samples_pm, family='poisson')
-		mod_eco = glm(use_y ~ Ecoregion, data=samples_pm, family='poisson')
+		mod_tree = glmer(use_y ~ 1 + (1|PlotID) + (1|TreeID) + (1|SampID), data=samples_pm, family=poisson(link='sqrt'))
+		mod_plot = glmer(use_y ~ 1 + (1|PlotID) + (1|PairID) + (1|SampID), data=samples_pm, family=poisson(link='sqrt'))
+		mod_site = glmer(use_y ~ 1 + (1|Ecoregion) + (1|PairID) + (1|SampID), data=samples_pm, family=poisson(link='sqrt'))
+		mod_eco = glmer(use_y ~ 1 + (1|Ecoregion) + (1|SampID), data=samples_pm, family=poisson(link='sqrt'))
+		obsID = 'SampID'
 	}
 	if(i %in% c('Avg_abun','rao_L2_s.5')){
-		mod_tree = lmer(use_y ~ 1 + (1|PlotID/TreeID), data=samples_pm)
-		mod_plot = lmer(use_y ~ 1 + (1|SiteID/PlotID), data=samples_pm)
-		mod_site = lmer(use_y ~ 1 + (1|SiteID) + Ecoregion, data=samples_pm)
-		mod_eco = glm(use_y ~ Ecoregion, data=samples_pm, family='gaussian')
+		mod_tree = lmer(use_y ~ (1|PlotID) + (1|TreeID), data=samples_pm)
+		mod_plot = lmer(use_y ~ 1 + (1|PlotID) + (1|PairID), data=samples_pm)
+		mod_site = lmer(use_y ~ 1 + (1|Ecoregion) + (1|PairID), data=samples_pm)
+		mod_eco = lmer(use_y ~ 1 + (1|Ecoregion), data=samples_pm)
+		obsID = 'Residual'
 	}
-
-	# Calculate R2 components
-	scale_mods[i,'Tree',c('focal_R2','control_R2')] = (get_allvar(mod_tree)/calc_totvar(mod_tree))[3:4]
 	
+	# Calculate adjusted repeatability (on link scale)
+	scale_rpt[i,'Tree',1:4] = as.numeric(calc_rpt(mod_tree, focalID='TreeID', adjID='PlotID', obsID=obsID))
+	scale_rpt[i,'Plot',1:4] = as.numeric(calc_rpt(mod_plot, focalID='PlotID', adjID='PairID', obsID=obsID))
+	scale_rpt[i,'Site',1:4] = as.numeric(calc_rpt(mod_site, focalID='PairID', adjID='Ecoregion', obsID=obsID))
+	scale_rpt[i,'Ecoregion','R.focal'] = as.numeric(calc_rpt(mod_eco, focalID='Ecoregion', obsID='SampID'))
 
-calc_totvar(mod_tree)
-data.frame(VarCorr(mod_tree))$vcov
+	scale_rpt[i,,'R.residual'] = as.numeric(sapply(c(mod_tree, mod_plot, mod_site, mod_eco), function(x) get_allvar(x)[obsID]/sum(get_allvar(x))))	
+}
+
+scale_rpt[,'Ecoregion',c('R.focal.adj','R.adj','R.adj.focal')] = scale_rpt[,'Ecoregion','R.focal']
+
+## Adjust for fixed effects from env predictors
+env_data = samples_pm[,c(locvars, regvars)]
+use_data = cbind(env_data, samples_pm[,c('SampID','TreeID','PlotID','PairID','Ecoregion')])
+
+# Drop observations with missing env variables
+use_data = na.omit(use_data)
+
+# Model ordered data as integers and re-scale predictors to unit variance
+for(i in 1:ncol(env_data)){
+	if(is.ordered(use_data[,i])) use_data[,i] = unclass(use_data[,i])
+	use_data[,i] = scale(use_data[,i], center=T, scale=T)
+}
+
+scale_rpt_res = array(NA, dim=c(length(comm_mets), length(scales), 5, 2), 
+	dimnames=list(Metric=comm_mets, Model=scales, Statistic = c('R.focal','R.focal.adj','R.adj','R.adj.focal','R.residual'), Control = c('Scale','Env'))
+)
+
+for(i in comm_mets){
+	use_y = samples_pm[rownames(use_data),i] + ifelse(i=='rao_L2_s.5', 0, 1)
+
+	if(i %in% c('Rich_S','Rich_M','Tot_abun_cor')){
+		mod_tree = glmer(use_y ~ 1 + (1|PlotID) + (1|TreeID) + (1|SampID), data=use_data, family=poisson(link='sqrt'))
+		mod_plot = glmer(use_y ~ 1 + (1|PlotID) + (1|PairID) + (1|SampID), data=use_data, family=poisson(link='sqrt'))
+		mod_site = glmer(use_y ~ 1 + (1|Ecoregion) + (1|PairID) + (1|SampID), data=use_data, family=poisson(link='sqrt'))
+		mod_eco = glmer(use_y ~ 1 + (1|Ecoregion) + (1|SampID), data=use_data, family=poisson(link='sqrt'))
+
+		mod_tree_env = glmer(use_y ~ Angle + Bryophytes + Shedding + FurrowDepth + pH + Density + WaterCapacity + DBH + Trans_tot_cor + 
+			(1|PlotID) + (1|TreeID) + (1|SampID), data=use_data, family=poisson(link='sqrt'))
+		mod_plot_env = glmer(use_y ~ OpenPos + Soil_pH +
+			(1|PlotID) + (1|PairID) + (1|SampID), data=use_data, family=poisson(link='sqrt'))
+		mod_site_env = glmer(use_y ~ Elevation + AP + CloudFreq_sd +
+			(1|Ecoregion) + (1|PairID) + (1|SampID), data=use_data, family=poisson(link='sqrt'))
+		mod_eco_env = glmer(use_y ~ Elevation + AP + CloudFreq_sd +
+			(1|Ecoregion) + (1|SampID), data=use_data, family=poisson(link='sqrt'))
+		obsID = 'SampID'
+	}
+	if(i %in% c('Avg_abun','rao_L2_s.5')){
+		mod_tree = lmer(use_y ~ (1|PlotID) + (1|TreeID), data=use_data)
+		mod_plot = lmer(use_y ~ 1 + (1|PlotID) + (1|PairID), data=use_data)
+		mod_site = lmer(use_y ~ 1 + (1|Ecoregion) + (1|PairID), data=use_data)
+		mod_eco = lmer(use_y ~ 1 + (1|Ecoregion), data=use_data)
+
+		mod_tree_env = lmer(use_y ~ Angle + Bryophytes + Shedding + FurrowDepth + pH + Density + WaterCapacity + DBH + Trans_tot_cor + 
+			(1|PlotID) + (1|TreeID), data=use_data)
+		mod_plot_env = lmer(use_y ~ OpenPos + Soil_pH +
+			(1|PlotID) + (1|PairID), data=use_data)
+		mod_site_env = lmer(use_y ~  Elevation + AP + CloudFreq_sd +
+			(1|Ecoregion) + (1|PairID), data=use_data)
+		mod_eco_env = lmer(use_y ~ Elevation + AP + CloudFreq_sd +
+			(1|Ecoregion), data=use_data)
+		obsID = 'Residual'
+	}
 	
-	components = sapply(list(mod_tree, mod_plot, mod_site), function(x) data.frame(VarCorr(x))$vcov[1]/calc_totvar(x))
-	components = c(components, attr(r.squaredLR(mod_eco), 'adj.r.squared'))
-	names(components) = c('Tree','Plot','Site','Ecoregion')
+	# Calculate adjusted repeatability (on link scale)
+	scale_rpt_res[i,'Tree',1:4,] = sapply(list(mod_tree, mod_tree_env), function(mod) as.numeric(calc_rpt(mod, focalID='TreeID', adjID=c('Fixed','PlotID'), obsID=obsID)))
+	scale_rpt_res[i,'Plot',1:4,] = sapply(list(mod_plot, mod_plot_env), function(mod) as.numeric(calc_rpt(mod, focalID='PlotID', adjID=c('Fixed','PairID'), obsID=obsID)))
+	scale_rpt_res[i,'Site',1:4,] = sapply(list(mod_site, mod_site_env), function(mod) as.numeric(calc_rpt(mod, focalID='PairID', adjID=c('Fixed','Ecoregion'), obsID=obsID)))
+	scale_rpt_res[i,'Region',1:4,] = sapply(list(mod_eco, mod_eco_env), function(mod) as.numeric(calc_rpt(mod, focalID='Ecoregion', adjID='Fixed', obsID=obsID)))
+
+	scale_rpt_res[i,,'R.residual','Scale'] = as.numeric(sapply(c(mod_tree, mod_plot, mod_site, mod_eco), function(x) get_allvar(x)[obsID]/sum(get_allvar(x))))
+	scale_rpt_res[i,,'R.residual','Env'] = as.numeric(sapply(c(mod_tree_env, mod_plot_env, mod_site_env, mod_eco_env), function(x) get_allvar(x)[obsID]/sum(get_allvar(x))))	
+}
+
+# Format into table
+library(reshape)
+rpt_melt = melt(scale_rpt)
+rpt_df = cast(rpt_melt, Metric+Model ~ Statistic, subset=Statistic %in% c('R.focal.adj','R.adj.focal','R.residual'))
+
+rpt_df$Metric = factor(rpt_df$Metric, levels=comm_mets)
+rpt_df$Model = factor(rpt_df$Model, levels=scales)
+rpt_df = rpt_df[order(rpt_df$Metric, rpt_df$Model),c(1,2,5,4,3)]
+
+write.csv(rpt_df, './Figures/scale_mods_repeatability.csv', row.names=F)
+
+# Plot R2 components
+components = scale_rpt['Rich_S',,'R.focal.adj']
+
+pdf('./Figures/variance across scales nested sample morphospecies richness.pdf', height=4, width=4)
+par(mar=c(3,5,2,1))
+barplot(components, las=1, ylim=c(0,.3), ylab=expression(R^2), main='Sample Morphospecies Richness')
+dev.off()
+
+# Plot components after adjusting for fixed effects of env predictors
+svg('./Figures/repeatability of community metrics across scales env residuals.svg', height=4, width=5)
+par(mar=c(3, 4.5, 1, 1))
+barplot(t(scale_rpt[,,'R.focal.adj']), beside=T, legend.text = colnames(scale_rpt), las=1, ylim=c(0,1),
+	args.legend=list(x='topright', bty='n'), ylab='Variation Explained',
+	names.arg=expression(R[S],R[M],N[TOT],N[AVG],FD), space=c(0.2,0.8))
+barplot(t(scale_rpt_res[,,'R.focal.adj']), beside=T, add=T, density=20, col='black',
+	axes=F, names.arg=expression(R[S],R[M],N[TOT],N[AVG],FD), space=c(0.2,0.8))
+dev.off()
 
 
 
@@ -341,7 +464,8 @@ sigma.tree = data.frame(VarCorr(mod_full))$vcov[1]
 sigma.site = data.frame(VarCorr(mod_full))$vcov[2]
 
 # Calculate total variance and R2 (based on Nakagawa and Schielzeth 2013)
-sigma.tot = calc_totvar(mod_full)
+# NO LONGER WORKS: NEED TO RECALCULATE 9/29/2015
+#sigma.tot = calc_totvar(mod_full)
 
 # Conditional R2 (variance explained by all factors)
 (sigma.fixed + sigma.tree + sigma.site) / sigma.tot
@@ -396,32 +520,6 @@ anova(mod_full, update(mod_full, .~.-TopoPos), test='Chisq') # test TopoPos
 anova(mod_full, update(mod_full, .~.-Ecoregion), test='Chisq') 
 
 boxplot(Tot_abun_cor~Ecoregion, data=samples_pm)
-
-
-## Effects of scale itself
-mod_tree = glmer(use_y ~ 1 + (1|PlotID/TreeID), data=samples_pm, family='poisson')
-mod_plot = glmer(use_y ~ 1 + (1|SiteID/PlotID), data=samples_pm, family='poisson')
-mod_site = glmer(use_y ~ 1 + (1|SiteID) + Ecoregion, data=samples_pm, family='poisson')
-mod_eco = glm(use_y ~ Ecoregion, data=samples_pm, family='poisson')
-mod_full = glmer(use_y ~ 1 + (1|SiteID/PlotID/TreeID) + Ecoregion, data=samples_pm, family='poisson')
-
-# Avg abun models
-mod_tree = lmer(use_y ~ 1 + (1|PlotID/TreeID), data=samples_pm)
-mod_plot = lmer(use_y ~ 1 + (1|SiteID/PlotID), data=samples_pm)
-mod_site = lmer(use_y ~ 1 + (1|SiteID) + Ecoregion, data=samples_pm)
-mod_eco = glm(use_y ~ Ecoregion, data=samples_pm, family='gaussian')
-mod_full = lmer(use_y ~ 1 + (1|SiteID/PlotID/TreeID) + Ecoregion, data=samples_pm)
-
-
-# Plot R2 components
-components = sapply(list(mod_tree, mod_plot, mod_site), function(x) data.frame(VarCorr(x))$vcov[1]/calc_totvar(x))
-components = c(components, attr(r.squaredLR(mod_eco), 'adj.r.squared'))
-names(components) = c('Tree','Plot','Site','Ecoregion')
-
-pdf('./Figures/variance across scales nested sample morphospecies richness.pdf', height=4, width=4)
-par(mar=c(3,5,2,1))
-barplot(components, las=1, ylim=c(0,.3), ylab=expression(R^2), main='Sample Morphospecies Richness')
-dev.off()
 
 
 ## Variation in tree-level morphotype/morphospecies richness across scales
@@ -524,36 +622,19 @@ par(mar=c(3,5,2,1))
 barplot(components, las=1, ylim=c(0,.5), ylab=expression(R^2), main='Sample Morphotype Richness')
 dev.off()
 
-## Average abundace models
-## Can't use Poisson.
-
-
-
-## GET CI FOR VARIANCE COMPONENTS
-## NOT IMPLEMENTED YET
-	# Bootstrap fixed effects variance estimate only
-	varboot = bootMer(mod, calc_fixedvar, nsim=1000, use.u=T, type='parametric')
-	ints_boot = boot.ci(varboot, index=1, type='perc')$percent[4:5]
-
-	# Profile likelihood confidence intervals for random and fixed effects
-	pf = profile(mod_full, 1:5)
-
-	vpf = varianceProf(pf) # converts to variance scale (by squaring)
-	ints = confint(vpf, parm=1:5, method='profile')
 
 #############################
 ### Variance Partitioning ###
 
 # Sample-scale response
-use_y = samples_pm$Avg_abun #+ 1# Rich_M, Rich_S, Tot_abun_cor, Avg_abun
-#use_y = FD[rownames(samples_pm), 'rao_L2_s.5'] # Read in below in FD section
+use_y = samples_pm$rao_L2_s.5# + 1# Rich_M, Rich_S, Tot_abun_cor, Avg_abun, rao_L2_s.5  # don't use + 1 on FD
 locvars = c(sampvars, treevars)
 use_data = samples_pm[,c(locvars, regvars)]
 
 # Tree-scale response
-use_y = trees_pm$Avg_abun_tree #+ 1 # Rich_S_tree, Rich_M_tree, Tot_abun_tree_cor, Avg_abun_tree
-locvars = treevars
-use_data = trees_pm[,c(locvars, regvars)]
+#use_y = trees_pm$Avg_abun_tree #+ 1 # Rich_S_tree, Rich_M_tree, Tot_abun_tree_cor, Avg_abun_tree
+#locvars = treevars
+#use_data = trees_pm[,c(locvars, regvars)]
 
 # Remove observations with missing values
 missing = rowSums(is.na(use_data)|is.na(use_y))>0
@@ -565,16 +646,23 @@ for(i in 1:ncol(use_data)){
 	if(is.ordered(use_data[,i])) use_data[,i] = unclass(use_data[,i])
 }
 
+# For count models
 locmod = glm(use_y~., data=use_data[,locvars], family='poisson')
 regmod = glm(use_y~., data=use_data[,regvars], family='poisson')
 fullmod = glm(use_y~., data=use_data, family='poisson')
+R2s = sapply(list(local = locmod, regional = regmod, both = fullmod), function(x) attr(r.squaredLR(x),'adj.r.squared'))
+
 
 # For average abundance and FD
-locmod = glm(use_y~., data=use_data[,locvars], family='gaussian')
-regmod = glm(use_y~., data=use_data[,regvars], family='gaussian')
-fullmod = glm(use_y~., data=use_data, family='gaussian')
+locmod = lm(use_y~., data=use_data[,locvars])
+regmod = lm(use_y~., data=use_data[,regvars])
+fullmod = lm(use_y~., data=use_data)
+R2s = sapply(list(local = locmod, regional = regmod, both = fullmod), function(x) summary(x)$adj.r.squared)
 
-R2s = sapply(list(local = locmod, regional = regmod, both = fullmod), function(x) r.squaredLR(x))
+
+# Calculate R2 using Nakagawa and Schielzeth 2013 mariginal R2 (even though no random effects)
+# Estimates unreliable: DECIDED TO USE LR INSTEAD 9/27/2015
+#R2s = sapply(list(local = locmod, regional = regmod, both = fullmod), function(x) r.squaredGLMM(x)['R2m'])
 
 # Save results
 varpart_richS = partvar2(R2s)
@@ -583,10 +671,133 @@ varpart_totabun = partvar2(R2s)
 varpart_avgabun = partvar2(R2s)
 varpart_fd = partvar2(R2s)
 
-varpart_richS_tree = partvar2(R2s)
-varpart_richM_tree = partvar2(R2s)
-varpart_totabun_tree = partvar2(R2s)
-varpart_avgabun_tree = partvar2(R2s)
+# No longer using
+#varpart_richS_tree = partvar2(R2s)
+#varpart_richM_tree = partvar2(R2s)
+#varpart_totabun_tree = partvar2(R2s)
+#varpart_avgabun_tree = partvar2(R2s)
+
+## Fit full models and save coefficients
+metrics = c('Rich_S','Rich_M','Tot_abun_cor','Avg_abun','rao_L2_s.5')
+envvars = c(locvars, regvars)
+
+use_data = samples_pm[,envvars]
+
+# Remove observations with missing values
+missing = rowSums(is.na(use_data))>0
+use_data = use_data[!missing,]
+
+# Model ordered data as integers
+# Center and scale predictors to get standardized effects
+for(i in 1:ncol(use_data)){
+	if(is.ordered(use_data[,i])) use_data[,i] = unclass(use_data[,i])
+	use_data[,i] = as.numeric(use_data[,i])
+}
+use_data = scale(use_data, center=T, scale=T)
+use_data = data.frame(use_data)
+
+varpart_mods = array(NA, dim=c(length(metrics), length(envvars), 6), 
+	dimnames=list(Response=metrics, Predictor=envvars, Statistic=c('Est','SE','Dev.drop','P.drop','Dev.add','P.add')))
+
+for(y in metrics){
+	use_y = samples_pm[rownames(use_data), y] + ifelse(y=='rao_L2_s.5', 0, 1)
+
+	if(y %in% c('Rich_S','Rich_M','Tot_abun_cor')){
+		full_mod = glm(use_y ~ ., data=use_data, family='poisson')
+	}
+
+	if(y %in% c('Avg_abun','rao_L2_s.5')){
+		full_mod = glm(use_y ~ ., data=use_data, family='gaussian')
+	}
+	
+	varpart_mods[y,,'Est'] = coef(full_mod)[envvars]
+	varpart_mods[y,,'SE'] = coef(summary(full_mod))[envvars,'Std. Error']
+	
+	for(x in envvars){
+		drop_formula = paste('.~.-', x, sep='')
+		add_formula = paste('use_y~', x, sep='')
+		
+		drop_mod = do.call('update', list(full_mod, as.formula(drop_formula)))
+		add_mod = do.call('update', list(full_mod, as.formula(add_formula)))
+
+		lrtest_drop = anova(drop_mod, full_mod, test='Chisq')
+		lrtest_add = anova(add_mod, test='Chisq')
+
+		varpart_mods[y,x,c('Dev.drop','P.drop')] = as.numeric(lrtest_drop[2,c('Deviance','Pr(>Chi)')])
+		varpart_mods[y,x,c('Dev.add','P.add')] = as.numeric(lrtest_add[2,c('Deviance','Pr(>Chi)')])
+	}
+
+}
+
+varpart_melt = melt(varpart_mods)
+varpart_df = cast(varpart_melt, Response+Predictor~Statistic)
+varpart_df$Response = factor(varpart_df$Response, levels=c('Rich_S','Rich_M','Tot_abun_cor','Avg_abun','rao_L2_s.5'))
+varpart_df$Scale = with(varpart_df, ifelse(Predictor %in%  sampvars, 'Sample',
+	ifelse(Predictor %in% treevars, 'Tree', 
+	ifelse(Predictor %in% c('OpenPos','Soil_pH'), 'Plot', 'Site'))))
+varpart_df = varpart_df[with(varpart_df, order(Response, 1-abs(Est))),]
+varpart_df = varpart_df[,c('Response','Predictor','Scale', 'Est','SE','Dev.drop','P.drop','Dev.add','P.add')]
+
+varnames = c('Surface angle','Bryophyte abundance','Bark stability','Bark furrow depth',
+	'Bark pH', 'Bark density','Bark WHC','Tree DBH','Light transmittance','Elevation','Cloud seasonality',
+	'Annual precipitation','Topographic openness','Soil pH')
+names(varnames) = envvars
+varpart_df$Predictor = varnames[varpart_df$Predictor]
+
+write.csv(varpart_df, './Figures/community metric env models.csv')
+
+
+
+
+
+## Plot scales over which important env variables vary
+# Rich_M, FD: Bryophytes, Shedding, WaterCapacity, DBH, Trans_tot_cor
+# Tot_abun_cor: also pH and Density
+# Avg_abun: only Bryophytes, DBH, maybe WaterCapacity
+use_env = c('Bryophytes','Shedding','WaterCapacity','pH','FurrowDepth','Trans_tot_cor', 'DBH')
+
+use_data = samples_pm[,c(use_env, 'SampID','TreeID','PlotID','PairID','Ecoregion')]
+
+# Model ordered data as integers
+for(i in 1:length(use_env)){
+	if(is.ordered(use_data[,i])) use_data[,i] = unclass(use_data[,i])
+}
+
+scale_rpt_env = array(NA, dim=c(length(use_env), length(scales), 5), 
+	dimnames=list(Predictor=use_env, Model=scales, Statistic = c('R.focal','R.focal.adj','R.adj','R.adj.focal','R.residual'))
+)
+
+for(i in use_env){
+	use_y = use_data[,i]
+
+ 	if(!(i %in% c('DBH','Trans_tot_cor'))) mod_tree = lmer(use_y ~ (1|PlotID) + (1|TreeID), data=use_data) # 	
+	mod_plot = lmer(use_y ~ 1 + (1|PlotID) + (1|PairID), data=use_data)
+	mod_site = lmer(use_y ~ 1 + (1|Ecoregion) + (1|PairID), data=use_data)
+	mod_eco = lmer(use_y ~ 1 + (1|Ecoregion), data=use_data)
+	obsID = 'Residual'
+	
+	# Calculate adjusted repeatability (on link scale)
+	if(!(i %in% c('DBH','Trans_tot_cor'))) scale_rpt_env[i,'Tree',1:4] = as.numeric(calc_rpt(mod_tree, focalID='TreeID', adjID='PlotID', obsID=obsID)) # 
+	scale_rpt_env[i,'Plot',1:4] = as.numeric(calc_rpt(mod_plot, focalID='PlotID', adjID='PairID', obsID=obsID))
+	scale_rpt_env[i,'Site',1:4] = as.numeric(calc_rpt(mod_site, focalID='PairID', adjID='Ecoregion', obsID=obsID))
+	scale_rpt_env[i,'Region','R.focal'] = as.numeric(calc_rpt(mod_eco, focalID='Ecoregion', obsID='SampID'))
+
+	scale_rpt_env[i,,'R.residual'] = as.numeric(sapply(c(mod_tree, mod_plot, mod_site, mod_eco), function(x) get_allvar(x)[obsID]/sum(get_allvar(x))))	
+}
+
+scale_rpt_env[,'Region',c('R.focal.adj','R.adj','R.adj.focal')] = scale_rpt_env[,'Region','R.focal']
+
+## Manuscript Figure
+svg('./Figures/repeatability of environment across scales.svg', height=4, width=5)
+par(mar=c(3, 4.5, 1, 1))
+barplot(t(scale_rpt_env[1:6,,'R.focal.adj']), beside=T, legend.text = colnames(scale_rpt_env), las=1, ylim=c(0,1),
+	args.legend=list(x='topright', bty='n'), ylab='Variation Explained',
+	names.arg=expression(Bryophytes,Stability,WHC,pH,Furrows,Light), space=c(0.2,0.8))
+dev.off()
+
+
+
+
 
 
 
@@ -601,14 +812,18 @@ dist_L2mat = read.csv(paste(derive_dir, 'morpho_distance_matrix_sfact0.5.csv'), 
 pm_morphs = unique(subset(lichens, SiteID!='Bladen')$MorphID)
 morph_dmat = dist_L2mat[pm_morphs, pm_morphs]
 morphos_pm = morphos[pm_morphs,]
-use_samps = samples_pm$SampID
+use_samps = as.character(samples_pm$SampID)
 comm = sampXmorph[use_samps[use_samps %in% rownames(sampXmorph)], pm_morphs]
 
 # PCOA of trait distance matrix
-mds = pcoa(morph_dmat, correction='lingoes')
+mds = cmdscale(morph_dmat, k=nrow(morph_dmat)-2, eig=T, add=T) # Uses Calliez correction for neg eigenvalues
+
+# Eigenvalues of axes
+eigs = mds$eig[1:(nrow(morph_dmat)-2)]
+plot(1:length(eigs), eigs/sum(eigs))
 
 # Define morphotype vectors for biplots
-pcoa_vecs = mds$vectors
+pcoa_vecs = mds$points
 
 sum(rownames(pcoa_vecs)!=colnames(comm))
 
@@ -669,30 +884,90 @@ dev.off()
 comm_hel = sqrt(comm/rowSums(comm))
 
 # Calculate location of samples in trait space
-sampXpcoa = as.matrix(comm_hel) %*% mds$vectors 
+sampXpcoa = as.matrix(comm_hel) %*% pcoa_vecs 
 
-# Compute RDA with scales as predictors
+
+# Unconstrained ordination
 rda_null = rda(sampXpcoa)
 
-Xdata = samples[rownames(comm),c('TreeID','TopoPos','SiteID','Ecoregion')]
-Xdata = apply(Xdata, 2, function(x) as.numeric(x))
+# Make data for conditioning on environmental variables
+env_data = samples_pm[rownames(comm),c(locvars, regvars)]
+use_data = cbind(env_data, samples_pm[rownames(comm),c('SampID','TreeID','PlotID','PairID','Ecoregion')])
 
-rda_full = rda(sampXpcoa ~ TreeID + TopoPos + SiteID + Ecoregion, data=samples[rownames(comm),])
+# Remove samples that are missing env vars (41 samples)- will be slightly different from other rda
+keep_rows = rowSums(is.na(env_data))==0
+use_data = use_data[keep_rows,]
 
-rda_tree = rda(sampXpcoa ~ TreeID + Condition(PlotID), data=samples[rownames(comm),])
-rda_plot = rda(sampXpcoa ~ PlotID + Condition(SiteID), data=samples[rownames(comm),])
-rda_site = rda(sampXpcoa ~ SiteID + Condition(Ecoregion), data=samples[rownames(comm),])
-rda_eco = rda(sampXpcoa ~ Ecoregion, data=samples[rownames(comm),])
+# Model ordered data as integers and re-scale predictors to unit variance
+for(i in 1:ncol(env_data)){
+	if(is.ordered(use_data[,i])) use_data[,i] = unclass(use_data[,i])
+	use_data[,i] = scale(use_data[,i], center=T, scale=T)
+}
+
+# Compute RDA with scales as predictors
+rda_full = rda(sampXpcoa[keep_rows,] ~ TreeID + TopoPos + PairID + Ecoregion, data=use_data)
+
+rda_tree = rda(sampXpcoa[keep_rows,] ~ TreeID + Condition(PlotID), data=use_data)
+rda_plot = rda(sampXpcoa[keep_rows,] ~ PlotID + Condition(PairID), data=use_data)
+rda_site = rda(sampXpcoa[keep_rows,] ~ PairID + Condition(Ecoregion), data=use_data)
+rda_eco = rda(sampXpcoa[keep_rows,] ~ Ecoregion, data=use_data)
+
+# Compute RDA with scales and env variables as predictors
+rda_tree_env = rda(sampXpcoa[keep_rows,] ~ TreeID + Condition(PlotID) + Condition(Angle) + Condition(Bryophytes) + Condition(Shedding) + Condition(FurrowDepth) + Condition(pH) +
+	Condition(Density) + Condition(WaterCapacity) + Condition(DBH) + Condition(Trans_tot_cor), data=use_data)
+rda_plot_env = rda(sampXpcoa[keep_rows,] ~ PlotID + Condition(PairID) + Condition(OpenPos) + Condition(Soil_pH), data=use_data)
+rda_site_env = rda(sampXpcoa[keep_rows,] ~ PairID + Condition(Ecoregion) + Condition(Elevation) + Condition(AP) + Condition(CloudFreq_sd), data=use_data)
+rda_eco_env = rda(sampXpcoa[keep_rows,] ~ Ecoregion + Condition(Elevation) + Condition(AP) + Condition(CloudFreq_sd), data=use_data)
 
 
-# Plot variance components
-components = sapply(list(rda_tree, rda_plot, rda_site, rda_eco), function(x) RsquareAdj(x)$adj.r.squared) # Variance explained is adjusted R2 from constrained component
+#save(rda_tree, rda_plot, rda_site, rda_eco, rda_tree_env, rda_plot_env, rda_site_env, rda_eco_env,file='RDA_models.RData')
+load('RDA_models.RData')
+
+
+# Plot variance components: type into manuscript table
+# semi-partial R2
+#components = sapply(list(rda_tree, rda_plot, rda_site, rda_eco), function(x) RsquareAdj(x)$adj.r.squared) # Variance explained is adjusted R2 from constrained component
+# partial R2
+calc_pR2 = function(mod){
+	SSfit = mod$CCA$tot.chi
+	SSres = mod$tot.chi - ifelse(is.null(mod$pCCA), 0, mod$pCCA$tot.chi)
+	SSfit/SSres
+}
+components = sapply(list(rda_tree, rda_plot, rda_site, rda_eco), calc_pR2)
 names(components) = c('Tree','Plot','Site','Ecoregion')
+components_env = sapply(list(rda_tree_env, rda_plot_env, rda_site_env, rda_eco_env), calc_pR2)
+names(components_env) = c('Tree','Plot','Site','Ecoregion')
 
 pdf('./Figures/variance across scales sample morphotype composition.pdf', height=4, width=4)
 par(mar=c(3,5,2,1))
 barplot(components, las=1, ylim=c(0,.4), ylab=expression(paste('Adjusted Semi-Partial ', R^2)), main='Sample Functional Composition')
 dev.off()
+
+
+## Manuscript Figure: repeatability across scales:
+# Note: all models omit 62 / 1440 observation for which some environmental variable(s) was missing.
+bp_dat = rbind(scale_rpt_res[,,'R.focal.adj','Scale'], components)
+bp_dat_res = rbind(scale_rpt_res[,,'R.focal.adj','Env'], components_env)
+
+
+svg('./Figures/repeatability of community metrics across scales.svg', height=4, width=5)
+par(mar=c(3, 4.5, 1, 1))
+barplot(t(as.matrix(bp_dat)), beside=T, legend.text = colnames(bp_dat), las=1, ylim=c(0,1),
+	args.legend=list(x='topright', bty='n'), ylab='Variation Explained',
+	names.arg=expression(R[S],R[M],N[TOT],N[AVG],FD,FC), space=c(0.2,0.8))
+dev.off()
+
+use_col = colorRampPalette(c('grey65','white'))(4)
+
+svg('./Figures/repeatability of community metrics across scales with res.svg', height=4, width=5)
+par(mar=c(3, 4.5, 1, 1))
+barplot(t(as.matrix(bp_dat)), beside=T, legend.text = colnames(bp_dat), las=1, ylim=c(0,1),
+	col=use_col, args.legend=list(x='topright', bty='n'), ylab='Variation Explained',
+	names.arg=expression(R[S],R[M],N[TOT],N[AVG],FD,FC), space=c(0.2,0.8))
+barplot(t(as.matrix(bp_dat_res)), beside=T, add=T, density=25, col='black',
+	axes=F, names.arg=expression(R[S],R[M],N[TOT],N[AVG],FD,FC), space=c(0.2,0.8))
+dev.off()
+
 
 
 # Effects of topographic position and ecoregion
@@ -703,13 +978,13 @@ vp = varpart(sampXpcoa, ~TopoPos, ~Ecoregion, data=samples[rownames(comm),])
 ## Local-Regional Variance Decompostion
 use_data = samples_pm[,c(locvars, regvars)]
 
-# Put in same order: omits samples without lichens
-use_data = use_data[rownames(use_pcoa),]
-
 # Remove observations with missing values
 missing = rowSums(is.na(use_data))>0
 use_data = use_data[!missing,]
-use_pcoa = sampXpcoa[!missing,]
+use_pcoa = sampXpcoa[rownames(use_data)[rownames(use_data) %in% rownames(sampXpcoa)],]
+
+# Put in same order: omits samples without lichens
+use_data = use_data[rownames(use_pcoa),]
 
 # Model ordered data as integers
 for(i in 1:ncol(use_data)){
@@ -724,9 +999,12 @@ varpart_CompM = vp_locreg$part$indfract[,'Adj.R.squared']
 varpart = cbind(varpart_richS, varpart_richM, varpart_totabun, varpart_avgabun, varpart_fd, varpart_CompM)[1:3,]
 colnames(varpart) = c('Rich_S','Rich_M','Tot_abun','Avg_abun','FD','Comp_M')
 
-png('./Figures/variance partition rich abun.png', height=400, width=500)
-barplot(varpart, legend.text = c('Plot/Site','Both','Sample/Tree'), las=1, ylim=c(0,1),
-	args.legend=list(x='topleft', bty='n'), ylab='Variation Explained')
+## Manuscript figure
+svg('./Figures/variance partition rich abun.svg', height=4, width=5)
+barplot(varpart, legend.text = c('Plot','Both','Sample/Tree'), las=1, ylim=c(0,1),
+	args.legend=list(x='topright', bty='n'), ylab='Variation Explained',
+	names.arg=expression(R[S],R[M],F[TOT],F[AVG],FD,FC))
+
 dev.off()
 
 write.csv(varpart, './Figures/local reg varpart.csv')
@@ -736,6 +1014,80 @@ Local = varpart[1,]+varpart[2,]
 Regional = varpart[3,]+varpart[2,]
 All = colSums(varpart)
 write.csv(data.frame(Local, Regional, All), './Figures/local regional R2.csv')
+
+
+## NOT FINISHED - DO LATER
+## Plot locations of samples in trait space from PCOA axes (Manuscript Figure)
+use_axes = 1:2
+
+# Calculate percent of variation that each axis explains
+ord_sum = eigs/sum(eigs)
+pcts = paste(format(ord_sum[use_axes]*100, digits=2), '%', sep='')
+
+
+
+# Fit vector of traits
+fit_traits = subset(use_traits, Level==1)$TraitName
+Tdata = morphos_pm[,fit_traits]
+Tdata$Attachment = as.numeric(Tdata$Attachment)
+Tdata$Asco = 1*as.logical(Tdata$Asco)
+Tdata$Asexual = 1*as.logical(Tdata$Asexual)
+ev_trait = envfit(mds, Tdata, choices=use_axes)
+
+# Fit vectors of env variables
+Xdata = use_data[,c(locvars,regvars)]
+ev_env = envfit(use_pcoa, Xdata, choice=use_axes)
+
+# Plot
+par(mar=c(5,5,1,1))
+paf(mfrow=c(1,2))
+
+# Samples with env variables
+use_pch = c(21,22)
+pch_fact = samples[rownames(comm),'Ecoregion']
+use_col = c('grey50','white')
+col_fact = samples[rownames(comm),'TopoPos']
+
+plot.new()
+plot.window(xlim=range(sampXpcoa[,use_axes[1]]), ylim=range(sampXpcoa[,use_axes[2]]))
+abline(h=0,v=0, lty=2)
+points(sampXpcoa[,use_axes], pch=use_pch[pch_fact], bg=use_col[col_fact])
+axis(1)
+axis(2, las=1)
+mtext(paste('PCoA',use_axes[1],' (',pcts[1], ')', sep=''),1,2)
+mtext(paste('PCoA',use_axes[2],' (',pcts[2], ')', sep=''),2,2)
+box()
+
+# environment
+add_arrow = function(x, col, label){
+	arrows(0,0,x[1],x[2], col=col, length=0.1, lwd=2)
+	text(x[1],x[2], labels=label, adj=1*(x<0), col=col)
+}
+
+# Morphotypes with traits
+use_pch = c(21,22)
+pch_fact = samples[rownames(comm),'Ecoregion']
+use_col = c('grey50','white')
+col_fact = samples[rownames(comm),'TopoPos']
+
+plot.new()
+plot.window(xlim=range(sampXpcoa[,use_axes[1]]), ylim=range(sampXpcoa[,use_axes[2]]))
+abline(h=0,v=0, lty=2)
+points(pcoa_vecs[,use_axes], col=2, pch=4)
+axis(1)
+axis(2, las=1)
+mtext(paste('PCoA',use_axes[1],' (',pcts[1], ')', sep=''),1,2)
+mtext(paste('PCoA',use_axes[2],' (',pcts[2], ')', sep=''),2,2)
+box()
+
+# traits: decided to just show attachment, form and reproduction
+for(i in c('Attachment','Asco','Asexual')){
+	add_arrow(ev_trait$vectors$arrows[i,], col='black', label=i)
+}
+for(i in rownames(ev_trait$factors$centroids)[grep('Form',rownames(ev_trait$factors$centroids))]){
+	label = sub('Form','', i)
+	text(ev_trait$factors$centroids[i,], label=label, col='black')
+}
 
 #################################################################
 ### Variation in single traits
@@ -763,8 +1115,52 @@ for(i in 1:nrow(traitdf)){
 dev.off()
 
 
-### Binary Traits
 
+### Binary Traits
+samples_pm$SampID = factor(samples_pm$SampID)
+
+bin_traits = c('Photobiont','Pseudocyphellae','Maculae','Asco','Asexual','Cilia','Rhizines','AscoCover','AsexualForm')
+scales = c('Tree','Plot','Site','Ecoregion')
+scale_rpt_bin = array(NA, dim=c(length(bin_traits), length(scales), 5), 
+	dimnames=list(Trait=bin_traits, Model=scales, Statistic = c('R.focal','R.focal.adj','R.adj','R.adj.focal','R.residual'))
+)
+
+for(i in bin_traits){
+	# Remove missing data
+	lichdata = subset(lichens_pm, !is.na(lichdata[,i]))
+
+	# Drop levels so that samples without lichens with this trait are not modeled
+	lichdata = droplevels(lichdata)
+	
+	# Calculate binomial response
+	use_y = as.matrix(calc_bin_abun(i, lichdata))
+
+	# Define scale variables
+	Xdata = samples_pm[rownames(use_y),c('SampID','TreeID','PlotID','PairID','Ecoregion')]
+	Xdata = droplevels(Xdata)	
+
+	# Fit models
+	mod_tree = glmer(use_y ~ 1 + (1|PlotID) + (1|TreeID) + (1|SampID), data=Xdata, family=binomial)
+	mod_plot = glmer(use_y ~ 1 + (1|PlotID) + (1|PairID) + (1|SampID), data=Xdata, family=binomial)
+	mod_site = glmer(use_y ~ 1 + (1|Ecoregion) + (1|PairID) + (1|SampID), data=Xdata, family=binomial)
+	mod_eco = glmer(use_y ~ 1 + (1|Ecoregion) + (1|SampID), data=Xdata, family=binomial)
+	obsID = 'SampID'
+	
+	# Calculate adjusted repeatability (on link scale)
+	scale_rpt_bin[i,'Tree',1:4] = as.numeric(calc_rpt(mod_tree, focalID='TreeID', adjID='PlotID', obsID=obsID))
+	scale_rpt_bin[i,'Plot',1:4] = as.numeric(calc_rpt(mod_plot, focalID='PlotID', adjID='PairID', obsID=obsID))
+	scale_rpt_bin[i,'Site',1:4] = as.numeric(calc_rpt(mod_site, focalID='PairID', adjID='Ecoregion', obsID=obsID))
+	scale_rpt_bin[i,'Ecoregion','R.focal'] = as.numeric(calc_rpt(mod_eco, focalID='Ecoregion', obsID='SampID'))
+
+	scale_rpt_bin[i,,'R.residual'] = as.numeric(sapply(c(mod_tree, mod_plot, mod_site, mod_eco), function(x) get_allvar(x)[obsID]/sum(get_allvar(x))))	
+}
+scale_rpt_bin[,'Ecoregion',c('R.focal.adj','R.adj','R.adj.focal')] = scale_rpt_bin[,'Ecoregion','R.focal']
+
+# Save repeatability to data frame
+bin_mods_df = cast(melt(scale_rpt_bin), Trait~Model, subset=Statistic=='R.focal.adj')
+
+
+## OLDER VERIONS OF MODELS
 # This function models variation in a binary trait across scales for both pres/abs and abun-weighted probabilities
 make_scalemods_bin = function(i, lichdata, sampdata){
 
@@ -809,7 +1205,7 @@ for(i in bin_traits){
 # Be careful interpreting models with 0s because maybe not enough observations at certain levels to fit
 # Photobiont models don't fit b/c only 19 samples had a cyanolichen: 5 were in Piedmont
 # Secondary trait models shouldn't be interpreted at the Tree level because there is not enough replication
-bin_mods_df = cast(melt(bin_mods), response+trait~scale)
+#bin_mods_df = cast(melt(bin_mods), response+trait~scale)
 
 pdf('./Figures/variation in traits across scales.pdf', height=5, width=7)
 par(mar=c(7.5,4.5,1,3))
@@ -817,8 +1213,7 @@ barplot(t(bin_mods[,,'Abundance']), beside=T, las=3, ylab=expression(R^2), ylim=
 axis(4)
 dev.off()
 
-
-# Examine trait differences across Ecoregions
+### Examine trait differences across Ecoregions
 eco_mods_bin = lapply(bin_traits, function(i){
 	# Remove missing data
 	lichdata = subset(lichens_pm, !is.na(lichdata[,i]))
@@ -879,8 +1274,38 @@ frut_abun = cbind(form_abun[,'fruticose'], rowSums(form_abun))
 frut_pres = cbind(form_pres[,'fruticose'], rowSums(form_pres))
 
 # Create table of predictors
-Xdata = samples[rownames(form_pres),c('TreeID','PlotID','SiteID','Ecoregion','TopoPos')]
+Xdata = samples_pm[rownames(form_abun),c('TreeID','PlotID','PairID','Ecoregion','SampID')]
+
+scale_rpt_cat = array(NA, dim=c(ncol(form_abun), length(scales), 5), 
+	dimnames=list(Trait=colnames(form_abun), Model=scales, Statistic = c('R.focal','R.focal.adj','R.adj','R.adj.focal','R.residual'))
+)
+
+for(i in colnames(form_abun)){
+	# Calculate binomial response
+	use_y = cbind(form_abun[,i], rowSums(form_abun))
+
+	# Fit models
+	mod_tree = glmer(use_y ~ 1 + (1|PlotID) + (1|TreeID) + (1|SampID), data=Xdata, family=binomial)
+	mod_plot = glmer(use_y ~ 1 + (1|PlotID) + (1|PairID) + (1|SampID), data=Xdata, family=binomial)
+	mod_site = glmer(use_y ~ 1 + (1|Ecoregion) + (1|PairID) + (1|SampID), data=Xdata, family=binomial)
+	mod_eco = glmer(use_y ~ 1 + (1|Ecoregion) + (1|SampID), data=Xdata, family=binomial)
+	obsID = 'SampID'
 	
+	# Calculate adjusted repeatability (on link scale)
+	scale_rpt_cat[i,'Tree',1:4] = as.numeric(calc_rpt(mod_tree, focalID='TreeID', adjID='PlotID', obsID=obsID))
+	scale_rpt_cat[i,'Plot',1:4] = as.numeric(calc_rpt(mod_plot, focalID='PlotID', adjID='PairID', obsID=obsID))
+	scale_rpt_cat[i,'Site',1:4] = as.numeric(calc_rpt(mod_site, focalID='PairID', adjID='Ecoregion', obsID=obsID))
+	scale_rpt_cat[i,'Ecoregion','R.focal'] = as.numeric(calc_rpt(mod_eco, focalID='Ecoregion', obsID='SampID'))
+
+	scale_rpt_cat[i,,'R.residual'] = as.numeric(sapply(c(mod_tree, mod_plot, mod_site, mod_eco), function(x) get_allvar(x)[obsID]/sum(get_allvar(x))))	
+}
+scale_rpt_cat[,'Ecoregion',c('R.focal.adj','R.adj','R.adj.focal')] = scale_rpt_cat[,'Ecoregion','R.focal']
+
+# Save repeatability to data frame
+cat_mods_df = cast(melt(scale_rpt_cat), Trait~Model, subset=Statistic=='R.focal.adj')
+
+
+# OLDER VERSIONS OF MODELS
 form_mods = sapply(list(crust_pres, crust_abun, frut_pres, frut_abun), function(y){
 	Xdata$y = y
 	mod_tree = glmer(y ~ 1 + (1|PlotID/TreeID), data=Xdata, family='binomial')
@@ -1000,10 +1425,43 @@ Ydata_pres$AscoAbun = Ydata_pres$AscoAbun + 1 # Because this quantity is 0 whene
 Ydata_pres[,1:4] = log(Ydata_pres[,1:4]) # Because quantities are strictly positive and mean increases with variance
 
 # Subset to plots in Piedmont and mountains
-Ydata_pres = Ydata_pres[samples_pm$SampID,]
-Ydata_abun = Ydata_abun[samples_pm$SampID,]
+keep_samps = rownames(Ydata_abun)[rownames(Ydata_abun) %in% as.character(samples_pm$SampID)]
+Ydata_pres = Ydata_pres[keep_samps,]
+Ydata_abun = Ydata_abun[keep_samps,]
 rownames(samples_pm) = samples_pm$SampID
 
+# Define predictors
+Xdata = samples_pm[keep_samps, c('SampID','TreeID','PlotID','PairID','Ecoregion')]
+
+scale_rpt_num = array(NA, dim=c(ncol(Ydata_abun), length(scales), 5), 
+	dimnames=list(Trait=colnames(Ydata_abun), Model=scales, Statistic = c('R.focal','R.focal.adj','R.adj','R.adj.focal','R.residual'))
+)
+
+for(i in colnames(Ydata_abun)){
+	# Calculate binomial response
+	use_y = Ydata_abun[,i]
+
+	# Fit models
+	mod_tree = lmer(use_y ~ 1 + (1|PlotID) + (1|TreeID), data=Xdata)
+	mod_plot = lmer(use_y ~ 1 + (1|PlotID) + (1|PairID), data=Xdata)
+	mod_site = lmer(use_y ~ 1 + (1|Ecoregion) + (1|PairID), data=Xdata)
+	mod_eco = lmer(use_y ~ 1 + (1|Ecoregion), data=Xdata)
+	obsID = 'Residual'
+	
+	# Calculate adjusted repeatability (on link scale)
+	scale_rpt_num[i,'Tree',1:4] = as.numeric(calc_rpt(mod_tree, focalID='TreeID', adjID='PlotID', obsID=obsID))
+	scale_rpt_num[i,'Plot',1:4] = as.numeric(calc_rpt(mod_plot, focalID='PlotID', adjID='PairID', obsID=obsID))
+	scale_rpt_num[i,'Site',1:4] = as.numeric(calc_rpt(mod_site, focalID='PairID', adjID='Ecoregion', obsID=obsID))
+	scale_rpt_num[i,'Ecoregion','R.focal'] = as.numeric(calc_rpt(mod_eco, focalID='Ecoregion', obsID='SampID'))
+
+	scale_rpt_num[i,,'R.residual'] = as.numeric(sapply(c(mod_tree, mod_plot, mod_site, mod_eco), function(x) get_allvar(x)[obsID]/sum(get_allvar(x))))	
+}
+scale_rpt_num[,'Ecoregion',c('R.focal.adj','R.adj','R.adj.focal')] = scale_rpt_num[,'Ecoregion','R.focal']
+
+# Save repeatability to data frame
+num_mods_df = cast(melt(scale_rpt_num), Trait~Model, subset=Statistic=='R.focal.adj')
+
+# OLDER MODELS
 num_mods = array(NA, dim=c(length(num_traits), 4, 2), dimnames=list(trait=num_traits, scale=c('Tree','Plot','Site','Region'), response=c('Presence','Abundance')))
 
 make_scalemods_num = function(y_pres, y_abun, sampdata){
@@ -1085,22 +1543,41 @@ for(i in c('Attachment')){
 	dev.off()
 }
 
-
 # Combine all trait models
-colorder = c('response','trait','Tree','Plot','Site','Region')
-trait_mods_df = rbind(bin_mods_df[,colorder], form_mods_df[,colorder], num_mods_df[, colorder])
+trait_mods_df = rbind(bin_mods_df, cat_mods_df, num_mods_df)
+trait_mods_df = trait_mods_df[,c('Trait','Tree','Plot','Site','Ecoregion')]
 
 # Add a column for the analysis method
-trait_mods_df$type = use_traits[as.character(trait_mods_df$trait),'type']
-trait_mods_df$type = ifelse(trait_mods_df$type %in% c('ordered','numeric'), 'Gaussian', 'Binomial') 
+trait_mods_df$Type = use_traits[as.character(trait_mods_df$Trait),'type']
+trait_mods_df$Type = ifelse(trait_mods_df$Type %in% c('ordered','numeric'), 'Gaussian', 'Binomial') 
 
 # Add a column for the trait category
-trait_mods_df$category = use_traits[as.character(trait_mods_df$trait), 'category']
-trait_mods_df[grep('Crustose|Fruticose', as.character(trait_mods_df$trait)),'category'] = 'form'
+trait_mods_df$Category = use_traits[as.character(trait_mods_df$Trait), 'category']
+trait_mods_df[grep('ose', as.character(trait_mods_df$Trait)),'Category'] = 'form'
 
 # Reorder rows and save
-trait_mods_df = trait_mods_df[with(trait_mods_df, order(response, category, type, trait)),]
+trait_mods_df = trait_mods_df[with(trait_mods_df, order(Category, Type, Trait)),]
 write.csv(trait_mods_df, './Figures/variation in traits across scales.csv', row.names=F)
+
+
+## Save all repeatability arrays
+save(scale_rpt, scale_rpt_res, scale_rpt_bin, scale_rpt_cat, scale_rpt_num, file='repeatability_statistic_arrays.RData')
+
+# OLD MODELS
+#colorder = c('response','trait','Tree','Plot','Site','Region')
+#trait_mods_df = rbind(bin_mods_df[,colorder], form_mods_df[,colorder], num_mods_df[, colorder])
+
+# Add a column for the analysis method
+#trait_mods_df$type = use_traits[as.character(trait_mods_df$trait),'type']
+#trait_mods_df$type = ifelse(trait_mods_df$type %in% c('ordered','numeric'), 'Gaussian', 'Binomial') 
+
+# Add a column for the trait category
+#trait_mods_df$category = use_traits[as.character(trait_mods_df$trait), 'category']
+#trait_mods_df[grep('Crustose|Fruticose', as.character(trait_mods_df$trait)),'category'] = 'form'
+
+# Reorder rows and save
+#trait_mods_df = trait_mods_df[with(trait_mods_df, order(response, category, type, trait)),]
+#write.csv(trait_mods_df, './Figures/variation in traits across scales.csv', row.names=F)
 
 #################################################################
 ### Variation in multi-trait FD

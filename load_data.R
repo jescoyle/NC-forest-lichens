@@ -76,13 +76,14 @@ top2 = as.vector(top2)
 
 samples = subset(samples, SampID %in% top2)
 lichens = subset(lichens, SampID %in% top2)
-FD = FD[use_top2,]
-FD_rep = FD_rep[use_top2,]
+
 
 # For morphotype data, only use top2 samples with lichens
 morphos = morphos[,colnames(morphos)!='MorphID']
 use_top2 = top2[top2 %in% rownames(sampXmorph)]
 sampXmorph = sampXmorph[use_top2,]
+FD = FD[use_top2,]
+FD_rep = FD_rep[use_top2,]
 
 # Remove morphotypes not in top2 samples
 keep_morphs = names(colSums(sampXmorph)!=0)
