@@ -184,13 +184,13 @@ use_col = c('grey80','white')
 use_fact = plots_pm[use_op,'TopoPos']
 
 # Calculate means across ecoregions and topo pos.
-means = with(samples_pm, aggregate(samples_pm[,c('Tot_abun_cor','Rich_M','rao_L2_s.5')], list(Ecoregion, TopoPos),
+means = with(samples_pm, aggregate(samples_pm[,c('Avg_abun','Rich_M','rao_L2_s.5')], list(Ecoregion, TopoPos),
 	FUN=function(x) mean(x, na.rm=T)))
 colnames(means)[1:2] = c('Ecogregion','TopoPos')
 
 # Calculate P-values for interaction using LR test
-pvals = sapply(c('Tot_abun_cor','Rich_M','rao_L2_s.5'), function(y){
-	use_fam = ifelse(y=='rao_L2_s.5', 'gaussian','poisson')
+pvals = sapply(c('Avg_abun','Rich_M','rao_L2_s.5'), function(y){
+	use_fam = ifelse(y=='Rich_M', 'poisson', 'gaussian')
 	use_y = samples_pm[,y] + ifelse(use_fam=='gaussian', 0, 1)
 	mod_inter = glm(use_y ~ Ecoregion*TopoPos, data=samples_pm, family=use_fam)
 	mod_full = glm(use_y ~ Ecoregion + TopoPos, data=samples_pm, family=use_fam)
@@ -200,21 +200,21 @@ pvals = sapply(c('Tot_abun_cor','Rich_M','rao_L2_s.5'), function(y){
 # Add these by hand later to control formatting.
 
 # Define expression with plot labels
-varnames = c('F[TOT]','R[M]','FD')
-names(varnames) = c('Tot_abun_cor','Rich_M','rao_L2_s.5')
+varnames = c('Average frequency','Morphotype richness','Functional diversity')
+names(varnames) = c('Avg_abun','Rich_M','rao_L2_s.5')
 
 # Loop through response variables
 svg('./Figures/Community metrics across plots.svg', height = 6, width=4)
 par(mfrow=c(3,1))
 par(lend=1)
 i = 1
-for(y in c('Tot_abun_cor','Rich_M','rao_L2_s.5')){
+for(y in c('Avg_abun','Rich_M','rao_L2_s.5')){
 	# Set margins
 	par(mar=c(1+i,5,3-i,1))
 	
 	# Add boxplots
 	boxplot(samples_pm[,y] ~ factor(samples_pm$PlotID, levels=use_op), 
-		ylab=parse(text=varnames[y]), axes=F, border=use_lcol[use_fact], col=use_col[use_fact])
+		ylab=varnames[y], axes=F, border=use_lcol[use_fact], col=use_col[use_fact])
 	axis(2, las=2); box()
 	
 	# Add panel label
@@ -407,6 +407,7 @@ for(i in comm_mets){
 	scale_rpt_res[i,,'R.residual','Env'] = as.numeric(sapply(c(mod_tree_env, mod_plot_env, mod_site_env, mod_eco_env), function(x) get_allvar(x)[obsID]/sum(get_allvar(x))))	
 }
 
+
 # Format into table
 library(reshape)
 rpt_melt = melt(scale_rpt)
@@ -440,6 +441,10 @@ dev.off()
 
 
 ## Do models one at a time to make plots:
+use_y = samples_pm$Rich_S + 1
+mod_all = glmer(use_y ~ (1|SampID) + (1|TreeID) + (1|PlotID) + (1|SiteID) + (1|Ecoregion), data=samples_pm, family=poisson(link='sqrt'))
+use_y = samples_pm$Avg_abun
+mod_all = lmer(use_y ~ (1|TreeID) + (1|PlotID) + (1|SiteID) + (1|Ecoregion), data=samples_pm)
 
 # Effects of ecoregion and topographic position
 mod_inter = glmer(use_y ~ 1 + Ecoregion*TopoPos + (1|SiteID) + (1|TreeID) , data = samples_pm, family='poisson')
@@ -949,6 +954,10 @@ dev.off()
 bp_dat = rbind(scale_rpt_res[,,'R.focal.adj','Scale'], components)
 bp_dat_res = rbind(scale_rpt_res[,,'R.focal.adj','Env'], components_env)
 
+bp_dat = cbind(1-bp_dat[,'Tree'], bp_dat)
+colnames(bp_dat)[1] = 'Sample'
+bp_dat_res = cbind(rep(0,nrow(bp_dat_res)), bp_dat_res)
+colnames(bp_dat_res)[1] = 'Sample'
 
 svg('./Figures/repeatability of community metrics across scales.svg', height=4, width=5)
 par(mar=c(3, 4.5, 1, 1))
@@ -957,15 +966,16 @@ barplot(t(as.matrix(bp_dat)), beside=T, legend.text = colnames(bp_dat), las=1, y
 	names.arg=expression(R[S],R[M],N[TOT],N[AVG],FD,FC), space=c(0.2,0.8))
 dev.off()
 
-use_col = colorRampPalette(c('grey65','white'))(4)
+use_col = c('black', colorRampPalette(c('grey65','white'))(4))
 
-svg('./Figures/repeatability of community metrics across scales with res.svg', height=4, width=5)
+plot_mets = c(1:2,4:6)
+svg('./Figures/repeatability of community metrics across scales with res.svg', height=4, width=6)
 par(mar=c(3, 4.5, 1, 1))
-barplot(t(as.matrix(bp_dat)), beside=T, legend.text = colnames(bp_dat), las=1, ylim=c(0,1),
+barplot(t(as.matrix(bp_dat)[plot_mets,]), beside=T, legend.text = colnames(bp_dat), las=1, ylim=c(0,1),
 	col=use_col, args.legend=list(x='topright', bty='n'), ylab='Variation Explained',
-	names.arg=expression(R[S],R[M],N[TOT],N[AVG],FD,FC), space=c(0.2,0.8))
-barplot(t(as.matrix(bp_dat_res)), beside=T, add=T, density=25, col='black',
-	axes=F, names.arg=expression(R[S],R[M],N[TOT],N[AVG],FD,FC), space=c(0.2,0.8))
+	names.arg=expression(R[S],R[M],N[AVG],FD,FC), space=c(0.2,0.8))
+barplot(t(as.matrix(bp_dat_res)[plot_mets,]), beside=T, add=T, density=25, col='black',
+	axes=F, names.arg=expression(R[S],R[M],N[AVG],FD,FC), space=c(0.2,0.8))
 dev.off()
 
 
@@ -1000,14 +1010,15 @@ varpart = cbind(varpart_richS, varpart_richM, varpart_totabun, varpart_avgabun, 
 colnames(varpart) = c('Rich_S','Rich_M','Tot_abun','Avg_abun','FD','Comp_M')
 
 ## Manuscript figure
-svg('./Figures/variance partition rich abun.svg', height=4, width=5)
-barplot(varpart, legend.text = c('Plot','Both','Sample/Tree'), las=1, ylim=c(0,1),
+svg('./Figures/variance partition rich abun.svg', height=4, width=4)
+barplot(as.matrix(varpart[,c('Rich_S','Rich_M','Avg_abun','FD','Comp_M')]), legend.text = c('Plot/Site','Both','Sample/Tree'), las=1, ylim=c(0,1),
 	args.legend=list(x='topright', bty='n'), ylab='Variation Explained',
-	names.arg=expression(R[S],R[M],F[TOT],F[AVG],FD,FC))
+	names.arg=expression(R[S],R[M],N[AVG],FD,FC))
 
 dev.off()
 
 write.csv(varpart, './Figures/local reg varpart.csv')
+varpart = read.csv('./Figures/local reg varpart.csv', row.names=1)
 
 # Write out table of R2
 Local = varpart[1,]+varpart[2,]

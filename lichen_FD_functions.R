@@ -91,6 +91,57 @@ calc_rao = function(abun, dmat){
 	})
 }
 
+# A function that calculates trait diversity for a single trait
+# Function will drop all missing observations.
+# x : vector of trait values
+# N : a vector of morphospecies frequencies, or missing if diversity not abundance-weighted
+# Group : factor vector indicating which groups each observation belongs to
+# vartype : string indicating whether trait has numeric or categorical values
+calc_trait_div = function(x, N=NA, Group, vartype){
+	# Drop missing observations
+	Group = Group[!is.na(x)]
+	N = N[!is.na(x)]
+	x = x[!is.na(x)]
+
+	# Frequency of each character state
+	if(!is.na(N[1])){
+		abun_mat = xtabs(N~Group+x)
+	} else {
+		abun_mat = as.matrix(table(Group, x))
+	}
+	
+	# Relative frequency
+	prop_mat = abun_mat/rowSums(abun_mat)
+
+	# Euclidean distance between character states
+	if(vartype %in% c('numeric','ordered')){
+		d_mat = as.matrix(dist(as.numeric(colnames(abun_mat))))
+	}
+	if(vartype %in% c('factor', 'symm', 'asymm')){
+		nfact = length(levels(factor(x)))
+		d_mat = matrix(1, nrow=nfact, ncol=nfact)
+		diag(dmat) = 0
+	}
+
+	# Calculat mpd
+	mpd = calc_rao(prop_mat, d_mat)
+
+	names(mpd) = rownames(abun_mat)
+	mpd
+}
+
+# A function that calculates a null distribution for trait diversity
+# reps :  number of randomizations
+# see other parameters above
+calc_trait_div_null = function(reps, x, N, Group, vartype){
+	null_dist = sapply(1:reps, function(i){
+		neworder = sample(x, length(x), replace=F)
+		newvals = calc_trait_div(neworder, N, Group, vartype)
+		return(newvals)
+	})
+}
+
+
 # A function that calculates the percentile of an observation x in null distribution null
 calc_p = function(x, null){
 	# Remove any na values

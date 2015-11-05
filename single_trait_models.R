@@ -1,10 +1,10 @@
 ## This script assesses variation in single traits for the Lichen FD Project
 
-git_dir = 'C:/Users/jrcoyle/Documents/UNC/Projects/Lichen Functional Diversity/Analysis/GitHub/'
+git_dir = 'C:/Users/jrcoyle/Documents/UNC/Projects/Lichen Functional Diversity/Analysis/GitHub/NC-forest-lichens/'
 
 # Load data & make data frames for analysis
 source(paste(git_dir, 'load_data.R', sep=''))
-source('./GitHub/lichen_FD_functions.R')
+source(paste(git_dir,'lichen_FD_functions.R', sep=''))
 
 # Colors
 repmode_col = c('#ff6600','#5f8dd3')
@@ -12,6 +12,9 @@ repmode_col = c('#ff6600','#5f8dd3')
 # Subset to plots only in Piedmont and Mountains
 lichens_pm = subset(lichens, SiteID!='Bladen')
 lichens_pm = droplevels(lichens_pm)
+plots_pm = subset(plot_data, SiteID!='Bladen')
+samples_pm = subset(samples, SiteID!='Bladen')
+samples_pm = droplevels(samples_pm)
 
 
 ################################################################
@@ -139,17 +142,6 @@ cor(plot_data[,climvars])
 plot(CloudFreq_mean~Elevation, data=plot_data)
 plot(T_mean~Elevation, data=plot_data)
 
-################################################################
-### Variance Partitioning
-
-locvars = c('Angle','Bryophytes','Shedding','FurrowDepth','pH','Density','WaterCapacity','DBH','Trans_tot_cor')
-regvars = c('Elevation','CloudFreq_sd','AP','OpenPos','Soil_pH')
-
-
-
-
-
-
 
 ################################################################
 ### Maximum Likelihood
@@ -164,6 +156,8 @@ library(MuMIn)
 #### Water traits ~ water availability ####
 # Focal traits: P(crustose), P(fruticose), P(cilia|foliose), Attachment, LobeDissect
 # Focal predictors: Sample: WaterCapacity, Bryophytes  Plot: CloudFreq_mean, VPD_max, OpenPos 
+
+
 
 ## Binary Traits
 
@@ -196,7 +190,7 @@ sampXmorph_abun = sampXmorph_pm
 
 # Calculate sample mean traits based on pres-abs vs. abun
 sampXtrait_pres = sapply(num_traits, function(i){
-	y = unclass(morphos[,i])
+	y = unclass(morphos[,i]) # Note: this causes Attachment to be +1 from values in lichens
 	comm = sampXmorph_pres[,rownames(morphos)]
 
 	# Ignore lichens where the trait is missing
@@ -212,7 +206,7 @@ sampXtrait_pres = sapply(num_traits, function(i){
 rownames(sampXtrait_pres) = rownames(sampXmorph_pm)
 
 sampXtrait_abun = sapply(num_traits, function(i){
-	y = unclass(morphos[,i])
+	y = unclass(morphos[,i]) # Note: this causes Attachment to be +1 from values in lichens
 	comm = sampXmorph_abun[,rownames(morphos)]
 
 	# Ignore lichens where the trait is missing
@@ -237,6 +231,9 @@ pred_vars1 = c('WaterCapacity','Bryophytes')
 pred_vars2 = c('CloudFreq_mean','VPD_max','OpenPos')
 Xdata = samples[,c(scale_vars, pred_vars1, pred_vars2)]
 
+# Three WHC appear to be outliers, so set to NA
+Xdata[with(Xdata, WaterCapacity<0.1&!is.na(WaterCapacity)),'WaterCapacity'] = NA
+
 # Log-transform WaterCapacity because it is a ratio of water held / unit bark by mass
 Xdata$WaterCapacity = log(Xdata$WaterCapacity)
 
@@ -249,11 +246,11 @@ Xdata[,pred_vars2] = Xdata[,pred_vars2] - rep(climMeans, each=nrow(Xdata))
 
 # Examine predictors: no major skew or outliers
 par(mfrow=c(1,5))
-for(i in pred_vars) hist(unclass(Xdata[,i]), main=i)
+for(i in c(pred_vars1, pred_vars2)) hist(unclass(Xdata[,i]), main=i)
 
 
 # Set response variable
-Y = frut_abun
+Y = cilia_abun
 
 mods = vector('list', length(pred_vars1)*length(pred_vars2))
 dim(mods) = c(length(pred_vars1),length(pred_vars2))
@@ -308,14 +305,14 @@ for(j in pred_vars2){
 		ests[i,j,c('b12','b21'),c('low95','up95')] = confint(mod)[2:3,]
 	#}
 	
-	ests[i,j,c('b1','b2'),c('low95','up95')] = sapply(list(mod1, mod2), function(x) confint(x)[2,])
+	ests[i,j,c('b1','b2'),c('low95','up95')] = t(sapply(list(mod1, mod2), function(x) confint(x)[2,]))
 	ests[i,j,'b1X2',c('low95','up95')] = confint(mod_X)[4,]
 	ests[i,j,'b_eco',c('low95','up95')] = confint(mod_eco)[3,]
 	ests[i,j,'b1Xeco',c('low95','up95')] = confint(mod_ecoX)[4,]
 	ests[i,j,'nobs','est'] = nrow(use_Y)
 	ests[i,j,,'P'] = c(sapply(test_list, function(x) x[2,'Pr(>Chi)']), NA)
 	ests[i,j,,'Dev_resid'] = c(sapply(list(mod1, mod2, mod, mod, mod_X, mod_eco, mod_ecoX), deviance), NA)
-	ests[i,j,,'R2'] = c(sapply(list(mod1, mod2, mod, mod, mod_X, mod_eco, mod_ecoX), function(x) attr(r.squaredLR(x), 'adj.r.squared')), NA)
+	ests[i,j,,'R2'] = c(sapply(list(mod1, mod2, mod, mod, mod_X, mod_eco, mod_ecoX), function(x) r.squaredLR(x)), NA)
 	
 }}
 
@@ -339,9 +336,9 @@ ests = array(NA, dim=c(length(pred_vars1), length(pred_vars2), 8, 6),
 
 for(i in pred_vars1){
 for(j in pred_vars2){
-	env1 = unclass(Xdata[names(Y),i])
+	env1 = Xdata[names(Y),i]
 	env2 = Xdata[names(Y),j]
-	Ecoregion = Xdata[names(Y),'Ecoregion']
+	Ecoregion = droplevels(Xdata[names(Y),'Ecoregion'])
 
 	# Remove data with missing observations
 	missing=is.na(Y)|is.na(env1)|is.na(env2)
@@ -382,14 +379,14 @@ for(j in pred_vars2){
 		ests[i,j,c('b12','b21'),c('low95','up95')] = confint(mod)[2:3,]
 	#}
 	
-	ests[i,j,c('b1','b2'),c('low95','up95')] = sapply(list(mod1, mod2), function(x) confint(x)[2,])
+	ests[i,j,c('b1','b2'),c('low95','up95')] = t(sapply(list(mod1, mod2), function(x) confint(x)[2,]))
 	ests[i,j,'b1X2',c('low95','up95')] = confint(mod_X)[4,]
 	ests[i,j,'b_eco',c('low95','up95')] = confint(mod_eco)[3,]
 	ests[i,j,'b1Xeco',c('low95','up95')] = confint(mod_ecoX)[4,]
 	ests[i,j,'nobs','est'] = length(use_Y)
 	ests[i,j,,'P'] = c(sapply(test_list, function(x) x[2,'Pr(>Chi)']), NA)
 	ests[i,j,,'Dev_resid'] = c(sapply(list(mod1, mod2, mod, mod, mod_X, mod_eco, mod_ecoX), deviance), NA)
-	ests[i,j,,'R2'] = c(sapply(list(mod1, mod2, mod, mod, mod_X, mod_eco, mod_ecoX), function(x) attr(r.squaredLR(x), 'adj.r.squared')), NA) # note that in scale models I did not use adj R2
+	ests[i,j,,'R2'] = c(sapply(list(mod1, mod2, mod, mod, mod_X, mod_eco, mod_ecoX), function(x) r.squaredLR(x)), NA) # note that in scale models I did not use adj R2
 	
 }}
 
@@ -400,6 +397,7 @@ for(j in pred_vars2){
 
 save(crust_ests, crust_mods, frut_ests, frut_mods, cilia_ests, cilia_mods,
 	attach_ests, attach_mods, dissect_ests, dissect_mods, file='water_trait_abun_models.RData')
+
 load('water_trait_abun_models.RData')
 
 
@@ -417,10 +415,13 @@ names(dimnames(all_ests)) = c('trait','pred.samp','pred.plot','parm','quant')
 ## Use corrplot to plot coef estimates
 #library(corrplot)
 
-use_col = c('blue3','red3')
-use_pch = c(1, 21)
+use_col = c('red3','blue3')
+use_pch = 21
 
 molten = melt(all_ests)
+
+# Interactions between sample- and larger-scale env predictors
+inter = acast(molten, trait~pred.samp+pred.plot~quant, subset=.(parm=='b1X2' & quant%in%c('est','P')))
 
 # Marginal effects of sample controlling for climate
 tab = acast(molten, trait~pred.samp+pred.plot~quant, subset=.(parm=='b12' & quant%in%c('est','P','low95','up95')))
@@ -431,16 +432,19 @@ par(mfrow=dim(tab)[1:2])
 
 for(i in 1:dim(tab)[1]){
 for(j in 1:dim(tab)[2]){
-	
+
 	this_est = tab[i,j,'est']
 	if(j %in% 1:3) ylim = max(abs(range(tab[i,1:3,c('low95','up95')])))
 	if(j %in% 4:6) ylim = max(abs(range(tab[i,4:6,c('low95','up95')])))
 	ylim = ylim*c(-1.05,1.05)
 	plot(0, this_est, axes=F, ylim=ylim, type='n')
-	abline(h=0, lty=2)
+	segments(par('usr')[1]*ifelse(j%%3==1, 0.7, 1), 0, par('usr')[2]*ifelse(j%%3==0, 0.7, 1), 0, lty=2)
 
-	segments(0,tab[i,j,'low95'],0,tab[i,j,'up95'])
-	points(0, this_est, pch=use_pch[(tab[i,j,'P']<0.05)+1], cex=2, bg=use_col[(this_est<0)+1])
+	segments(0,tab[i,j,'low95'],0,tab[i,j,'up95'], 
+		col=ifelse(inter[i,j,'P']>=0.05, 'black', use_col[(inter[i,j,'est']>0)+1]))
+	points(0, this_est, pch=use_pch, cex=2, 
+		bg=ifelse(tab[i,j,'P']<0.05, ifelse(inter[i,j,'P']>=0.05, 'black', use_col[(inter[i,j,'est']>0)+1]),'white'),
+		col=ifelse(inter[i,j,'P']>=0.05, 'black', use_col[(inter[i,j,'est']>0)+1]))
 	if(j %in% c(1,4)) axis(2, line=-2, las=1)
 	
 }}
@@ -448,6 +452,7 @@ dev.off()
 
 # Marginal effects of climate controlling for sample
 tab = acast(molten, trait~pred.plot+pred.samp~quant, subset=.(parm=='b21' & quant%in%c('est','P','low95','up95')))
+inter = acast(molten, trait~pred.plot+pred.samp~quant, subset=.(parm=='b1X2' & quant%in%c('est','P')))
 
 svg('./Figures/water_traits_marginal_effects_climate.svg', height=5, width=5)
 par(mar=c(0,0,0,0))
@@ -462,19 +467,24 @@ for(j in 1:dim(tab)[2]){
 	if(j %in% 5:6) ylim = max(abs(range(tab[i,5:6,c('low95','up95')])))
 	ylim = ylim*c(-1.05,1.05)
 	plot(0, this_est, axes=F, ylim=ylim, type='n')
-	abline(h=0, lty=2)
+	segments(par('usr')[1]*ifelse(j%%2==1, 0.7, 1), 0, par('usr')[2]*ifelse(j%%2==0, 0.7, 1), 0, lty=2)
 
-	segments(0,tab[i,j,'low95'],0,tab[i,j,'up95'])
-	points(0, this_est, pch=use_pch[(tab[i,j,'P']<0.05) + 1], cex=2, bg=use_col[(this_est<0)+1])
+	segments(0,tab[i,j,'low95'],0,tab[i,j,'up95'], 
+		col=ifelse(inter[i,j,'P']>=0.05, 'black', use_col[(inter[i,j,'est']>0)+1]))
+	points(0, this_est, pch=use_pch, cex=2, 
+		bg=ifelse(tab[i,j,'P']<0.05, ifelse(inter[i,j,'P']>=0.05, 'black', use_col[(inter[i,j,'est']>0)+1]),'white'),
+		col=ifelse(inter[i,j,'P']>=0.05, 'black', use_col[(inter[i,j,'est']>0)+1]))
+
 	if(j %in% c(1,3,5)) axis(2, line=-2, las=1)
 	
 }}
 dev.off()
 
+
 # Explanatory ability of models
-bark_tab = dcast(molten, trait+pred.samp~quant, subset=.(parm=='b1' & quant%in%c('est','P','R2','Dev_resid') & pred.plot=='VPD_max'))
+bark_tab = dcast(molten, trait+pred.samp~quant, subset=.(parm=='b1' & pred.plot=='VPD_max'))
 subset(bark_tab, P < 0.05)
-clim_tab = dcast(molten, trait+pred.plot~quant, subset=.(parm=='b2' & quant%in%c('est','P','R2','Dev_resid') & pred.samp=='Bryophytes'))
+clim_tab = dcast(molten, trait+pred.plot~quant, subset=.(parm=='b2' & pred.samp=='Bryophytes'))
 subset(clim_tab, P < 0.05)
 
 # Are there significantly different effect of bark scale variables across Ecoregions?
@@ -483,7 +493,6 @@ all_ests[,,'CloudFreq_mean','b1Xeco',c('est','P')]
 
 # Explore interactions
 # Do any models have a significant interaction between bark and plot scale variables?
-inter = acast(molten, trait~pred.samp+pred.plot~quant, subset=.(parm=='b1X2' & quant%in%c('est','P')))
 inter[,,'P']<0.05
 
 # Crustose: Bryophytes & OpenPos
@@ -508,6 +517,159 @@ curve(mod_func(x, climrange[2]), from=0, to=5, add=T, lwd=2, col=use_col[2])
 plot(yvals~I(Xdata[names(yvals), j]+climMeans[j]), las=1, ylab='P(Crustose)', xlab=j, ylim=c(0,1), pch=16, col='#00000050')
 curve(mod_func(x=0, level=x), from=climrange[1], to=climrange[2], add=T, lwd=2, col=use_col[1])
 curve(mod_func(x=5, level=x), from=climrange[1], to=climrange[2], add=T, lwd=2, col=use_col[2])
+
+
+## Figure 2: Attachment vs. Bryophytes with interactions
+use_col = c('#0000CD','#CD0000') # 'blue3', 'red3'
+use_col_trans = paste(use_col, '88', sep='')
+j='VPD_max'
+yvals = exp(sampXtrait_abun[,'Attachment'])
+xvals = seq(0,5,length.out=200)
+mod_func = function(x, level){
+	pred = predict(mod, data.frame(env1=x, env2=level), type='response', se.fit=T)
+	vals = pred$fit + t(qnorm(c(0.025, 0.5, 0.975))%*%t(pred$se.fit))
+	return(exp(vals))
+}
+
+mod = attach_mods['Bryophytes',j][[1]]
+pred_high = mod_func(xvals, max(mod$model$env2))
+pred_low = mod_func(xvals, min(mod$model$env2))
+
+svg('./Figures/attachment_bryophyte_VPD.svg', height=4, width=4)
+par(mar=c(4,4,1,1))
+par(lend=1)
+
+plot(yvals~Xdata[names(yvals), 'Bryophytes'], las=1, ylab='Attachment', xlab='Bryophyte Cover', pch=16, col='#00000050')
+polygon(c(xvals, rev(xvals)), c(pred_low[,1], rev(pred_low[,3])), col=use_col_trans[1], border=NA)
+polygon(c(xvals, rev(xvals)), c(pred_high[,1], rev(pred_high[,3])), col=use_col_trans[2], border=NA)
+lines(xvals, pred_low[,2], lwd=3, col=use_col[1])
+lines(xvals, pred_high[,2], lwd=3, col=use_col[2])
+
+dev.off()
+
+## Plot single effects of env vars on traits~quant
+names(bark_tab)[2] = 'pred'
+names(clim_tab)[2] = 'pred'
+tab = rbind(bark_tab, clim_tab)
+tab = tab[order(tab$trait),]
+tab[order(tab$R2, decreasing=T),]
+
+trait_order = c('ProbCrustose','ProbFruticose','Attachment','LobeDissect','Cilia')
+trait_names = c('Crustose','Fruticose','Attachment','Lobe dissection','Cilia')
+names(trait_names) = trait_order
+pred_order = c('WaterCapacity','Bryophytes','CloudFreq_mean','VPD_max','OpenPos')
+pred_names = c('WHC','Bryo','Cloud','VPD','Open')
+pred_names_long = c('Bark WHC','Bryophytes','Cloud Freq.','Max. VPD','Openness')
+names(pred_names_long) = pred_order
+
+tab$pred = factor(tab$pred, levels=pred_order)
+tab$trait = factor(tab$trait, levels=rev(trait_order))
+
+# Write out table
+eff_df = tab[order(tab$trait, tab$R2, decreasing=T),]
+eff_df$pred = pred_names_long[as.character(eff_df$pred)]
+eff_df$CI = with(eff_df, paste('(',round(low95, 3),', ', round(up95, 3),')', sep=''))
+eff_df[,c('P','R2','est')] = round(eff_df[,c('P','R2','est')], 3)
+write.table(eff_df[,c('trait','pred','est','CI','P','R2')], './Figures/water traits vs env ests.txt', sep='\t', quote=F, row.names=F)
+
+# Grouped by Trait
+svg('./Figures/water traits vs env grp by trait.svg', height=6, width=2.5)
+par(mfrow=c(5,1))
+par(lend=1)
+k=0
+for(i in trait_order){
+	par(mar=c(k*2/4, 4, (4-k)*2/4, 1))
+	use_data = subset(tab, trait==i)
+	xvals = as.numeric(use_data$pred)
+	plot(est~as.numeric(pred), data=use_data, axes=F, pch=16, 
+		ylim = range(use_data[,c('up95','low95')]), xlab='', ylab=trait_names[i])
+	abline(h=0, lty=2,lwd=2)
+	segments(xvals, use_data$low95, xvals, use_data$up95, lwd=2)
+	axis(2, las=1)	
+	box()
+	if(k==0) axis(3, at=1:5, labels=pred_names, tick=F, line=-.5)
+	if(k==4) axis(1, at=1:5, labels=pred_names, tick=F, line=-.5)
+	k = k+1
+}
+dev.off()
+
+# Grouped by env var
+
+
+
+## Plot all relationships
+mod_func = function(mod, x1, x2, logT = F){
+	pred = predict(mod, data.frame(env1=x1, env2=x2), type='response', se.fit=T)
+	fam = mod$family$family
+	if(fam=='gaussian'){
+		vals = pred$fit + t(qnorm(c(0.025, 0.5, 0.975))%*%t(pred$se.fit))
+	}
+	if(fam=='binomial'){
+		vals = pred$fit%*%t(c(1,1,1))
+	}
+	if(logT){ 
+		return(exp(vals))
+	} else {
+		return(vals)
+	}
+}
+
+mod_list = list(crust_mods, frut_mods, attach_mods, dissect_mods, cilia_mods)
+Ydata = list(crust_abun, frut_abun, sampXtrait_abun[,1], sampXtrait_abun[,2], cilia_abun)
+pred_names = c('log(WHC)', 'Bryophyte Cover', 'Cloud Freq.', 'VPD', 'Openness')
+
+svg('./Figures/water traits vs env.svg', height=6.5, width=6.5)
+layout(matrix(1:25, byrow=T, nrow=5))
+par(mar=rep(.3, 4))
+par(oma=c(3.5,4.5,0,0))
+par(lend=1)	
+for(i in 1:5){
+	trait = trait_order[i]
+	use_mods = mod_list[[i]]
+	yvals = Ydata[[i]]
+	if(i %in% 3:4) yvals = exp(yvals)
+	if(length(yvals)>nrow(sampXtrait_abun)) yvals = yvals[,1]/yvals[,2]
+	
+	for(j in 1:5){
+		env = pred_order[j]
+		xvals = Xdata[names(yvals),env] + ifelse(j %in% 3:5, climMeans[env], 0)
+
+		xrange = range(Xdata[,env], na.rm=T) + ifelse(j %in% 3:5, climMeans[env], 0)
+		xpredvals = seq(xrange[1], xrange[2], length.out=200)
+	
+		if(j %in% 1:2){
+			mod = use_mods[env,1][[1]]
+			ypred = mod_func(mod, xpredvals, mean(mod$model$env2), logT=i%in%3:4)
+			P = all_ests[trait, env, 1, 'b1', 'P']
+			r2 = all_ests[trait, env, 1, 'b1', 'R2']
+		}
+		if(j %in% 3:5){
+			mod = use_mods[1,env][[1]]
+			ypred = mod_func(mod, mean(mod$model$env1), xpredvals-climMeans[env], logT=i%in%3:4)
+			P = all_ests[trait, 1, env, 'b2', 'P']
+			r2 = all_ests[trait, 1, env, 'b2', 'R2'] 
+		}
+		
+
+		#par(mar=c((i-1)*2/4, (5-j)*4/4, (5-i)*2/4, (j-1)*4/4))
+		
+		plot(yvals~xvals, las=1, axes=F, pch=16, col='#00000020', ylab='', xlab='')
+		if(P < 0.05){
+			polygon(c(xpredvals, rev(xpredvals)), c(ypred[,1], rev(ypred[,3])), col='#00000050', border=NA)
+			lines(xpredvals, ypred[,2], lwd=1, col='black')
+		}
+		box()
+		if(j==1){
+			axis(2, las=1)
+			mtext(trait_names[i], 2, 2.5, cex=.7)
+		}
+		if(i==5){
+			axis(1)
+			mtext(pred_names[j], 1, 2, cex=.7)
+		}
+	}
+}
+dev.off()
 
 
 # Attachment: Bryophytes & All Clim
@@ -561,9 +723,46 @@ par(mar=c(4,4,1,1))
 dev.off()
 
 
-## Evaluate residual effects of Ecoregion after controling for the effect of climate predictors
+## Within-sample trait diversity for attachment and growth form
+
+# Attachment
+attach_dmat = as.matrix(dist(0:6))
+rownames(attach_dmat) = 0:6; colnames(attach_dmat) = 0:6
+attach_abun = xtabs(AbunCount~SampID + Attachment, data=lichens_pm)
+attach_abun = attach_abun/rowSums(attach_abun)
+
+attach_rao = calc_rao(attach_abun, attach_dmat)
+cbind(attach_abun, attach_rao) # rao is 0 when only one attachment height
+
+# Growth Form
+form_dmat = matrix(1, nrow=4, ncol=4)
+diag(form_dmat) = 0
+rownames(form_dmat) = levels(factor(lichens_pm$Form))
+colnames(form_dmat) = levels(factor(lichens_pm$Form))
+form_abun # from above
+form_abun_std = form_abun/rowSums(form_abun)
+form_rao = calc_rao(form_abun_std, form_dmat)
+
+div_df = data.frame(SampID=rownames(form_abun), attach_rao, form_rao)
+write.csv(div_df, 'trait_diversity.csv', row.names=F)
+
+div_df = merge(div_df, samples_pm)
+
+# Plot trait diversity versus N_tot, Bryophytes
+plot(attach_rao~Bryophytes, data=div_df)
+summary(lm(attach_rao~Bryophytes, data=div_df))
+
+plot(attach_rao~N_tot, data=div_df)
+
+plot(attach_rao~ sampXtrait_abun[div_df$SampID,'Attachment'], data=div_df)
+
+plot(form_rao~Bryophytes, data=div_df)
+summary(lm(form_rao~Bryophytes, data=div_df))
+
+plot(form_rao~N_tot, data=div_df)
 
 
+# Compare to null model.
 
 ################################################
 #### Reprodutive mode ~ substrate stability ####
@@ -669,6 +868,7 @@ summary(norep_abun_mod)
 
 cbind(coef(asco_abun_mod), coef(asex_abun_mod))
 
+
 ## Plot summaries of all model results
 model_levels=c('asco_pres','asco_abun','asex_pres','asex_abun','norep_pres','norep_abun')[6:1]
 use_mods = DBH_mods
@@ -690,6 +890,52 @@ xyplot(model~value, groups=control, data=use_ests, panel=function(x,y,groups,...
 	panel.abline(v=0, col='grey', lty=2)
 }, xlim=c(-.05, 0.05), xlab='DBH Effect', ylab='')
 dev.off()
+
+
+## Manuscript Figure: estimated effects of shedding/DBH on reproductive mode (abun) w/ and w/o covariates
+rep_mods = abind(DBH_mods, Shed_mods, along=.5)
+dimnames(rep_mods)[[1]] = c('DBH','Shedding')
+names(dimnames(rep_mods)) = c('Predictor','Mode','Count','Statistic','Control')
+rep_abun_df = dcast(melt(rep_mods[,c('asco','asex'),'abun',,]), Predictor+Mode+Control~Statistic)
+
+yvals = rep(1:2,2) + rep(c(.1,-.1), each=2)
+
+svg('./Figures/rep mode abun vs Shed and DBH.svg', height=2, width=6.5)
+#layout(matrix(1:3, nrow=1), widths=c(.4,.4,.2))
+par(mfrow=c(1,2))
+use_col = c('grey50','white')
+par(mar=c(4,0,1,1))
+par(oma=c(0,9,0,0))
+
+# Shedding
+use_df = subset(rep_abun_df, Predictor=='Shedding')
+plot(1,1, type='n', xlim=range(use_df[,c('up95','low95')]), ylim=c(0.5,2.5), axes=F, 
+	xlab='Effect of Bark Instability', ylab='')
+abline(v=0, lty=2, col='grey')
+segments(use_df$low95, yvals, use_df$up95, yvals)
+points(use_df$est, yvals, pch=21, bg=use_col[use_df$Mode])
+axis(1)
+axis(2, las=1, at=1:2, labels=c('With bark covariates','No bark covariates'), tick=F)
+usr=par('usr')
+segments(usr[1], usr[3], usr[2], usr[3])
+mtext('A', 3, 0, adj=0)
+
+# DBH
+use_df = subset(rep_abun_df, Predictor=='DBH')
+plot(1,1, type='n', xlim=range(use_df[,c('up95','low95')]), ylim=c(0.5,2.5), axes=F, 
+	xlab='Effect of Tree DBH', ylab='')
+abline(v=0, lty=2, col='grey')
+segments(use_df$low95, yvals, use_df$up95, yvals)
+points(use_df$est, yvals, pch=21, bg=use_col[use_df$Mode])
+axis(1)
+usr=par('usr')
+segments(usr[1], usr[3], usr[2], usr[3])
+mtext('B', 3, 0, adj=0)
+
+# Legend
+#legend('bottomright', c('Sexual','Asexual'), pch=21, pt.bg=use_col)
+dev.off()
+
 
 ## Another summary table of model results used in SEEC presentation
 use_mods = Shed_mods
@@ -810,7 +1056,7 @@ dbh_est_df = melt(DBH_mods[c('asco','asex'),'abun','est',])
 dbh_CI_df = melt(DBH_mods[c('asco','asex'),'abun',c('up95','low95'),])
 
 shed_est_df = melt(DBH_mods[c('asco','asex'),'abun','est',])
-dbh_CI_df = melt(DBH_mods[c('asco','asex'),'abun',c('up95','low95'),])
+she_CI_df = melt(DBH_mods[c('asco','asex'),'abun',c('up95','low95'),])
 
 
 ## Plot Prop reproductive mode vs shedding
@@ -895,7 +1141,7 @@ reproduction_pm = subset(reproduction, SampID %in% samples[samples$SiteID!='Blad
 
 
 # Focal traits: crustose, attachment, asexual
-# Focal predictors: total abundance
+# Focal predictors: total abundance and bryophyte abundance
 
 # Create sample-level response variables for P(Crustose), Attachment, and P(Asexual) in above sections
 crust_abun
@@ -904,34 +1150,42 @@ asex_abun = reproduction_pm[,c('Asex_abun','N')]
 
 # Make table of predictors
 scale_vars = c('SampID','PlotID','SiteID','Ecoregion')
-Xdata = merge(reproduction_pm[,c('SampID','N','S')], samples[,c(scale_vars,'TreeTaxonID')], all.x=T)
-Xdata$N_cor = Xdata$N - Xdata$S
-Xdata$N_avg = Xdata$N / Xdata$S
+Xdata = merge(reproduction_pm[,c('SampID','N','S')], samples[,c('Bryophytes',scale_vars,'TreeTaxonID')], all.x=T)
 rownames(Xdata) = Xdata$SampID
 
+# Convert Bryophytes to integer
+Xdata$Bryophytes = unclass(Xdata$Bryophytes) - 1
+
+# Calculate derived abundance estimates
+Xdata$N_cor = Xdata$N - Xdata$S
+Xdata$N_avg = Xdata$N / Xdata$S
 
 ## Plot relationships across plots
 
-Y = as.matrix(asex_abun) # crust_abun
+Y = as.matrix(crust_abun) # asex_abun
 yvals = Y[,1]/Y[,2]
 
 Xdata = Xdata[rownames(Y),]
+Xdata = droplevels(Xdata)
+
+# rescale N so that models fit more easily
+Xdata$N = Xdata$N/9
 
 # Examine separate means models
-plot(yvals~N_cor, data=Xdata, pch=16, col='#00000050')
+plot(yvals~N, data=Xdata, pch=16, col='#00000050')
 for(i in unique(lichens_pm$PlotID)){
 	use_obs = Xdata$PlotID==i
-	mod = glm(Y~N_cor, data=Xdata, family='binomial', subset=use_obs)
-	mod_func = function(x) predict(mod, data.frame(N_cor=x), type='response')
+	mod = glm(Y~N, data=Xdata, family='binomial', subset=use_obs)
+	mod_func = function(x) predict(mod, data.frame(N=x), type='response')
 
-	curve(mod_func(x), from=min(Xdata$N_cor[use_obs]), to = max(Xdata$N_cor[use_obs]), add=T, lwd=2)
+	curve(mod_func(x), from=min(Xdata$N[use_obs]), to = max(Xdata$N[use_obs]), add=T, lwd=2)
 }
 for(i in unique(lichens_pm$Ecoregion)){
 	use_obs = Xdata$Ecoregion==i
-	mod = glm(Y~N_cor, data=Xdata, family='binomial', subset=use_obs)
-	mod_func = function(x) predict(mod, data.frame(N_cor=x), type='response')
+	mod = glm(Y~N, data=Xdata, family='binomial', subset=use_obs)
+	mod_func = function(x) predict(mod, data.frame(N=x), type='response')
 
-	curve(mod_func(x), from=min(Xdata$N_cor[use_obs]), to = max(Xdata$N_cor[use_obs]), add=T, lwd=2, col=2)
+	curve(mod_func(x), from=min(Xdata$N[use_obs]), to = max(Xdata$N[use_obs]), add=T, lwd=2, col=2)
 }
 
 plot(yvals~N_avg, data=Xdata, pch=16, col='#00000050')
@@ -950,17 +1204,42 @@ for(i in unique(lichens_pm$Ecoregion)){
 	curve(mod_func(x), from=min(Xdata$N_avg[use_obs]), to = max(Xdata$N_avg[use_obs]), add=T, lwd=2, col=2)
 }
 
+plot(yvals~Bryophytes, data=Xdata, pch=16, col='#00000050')
+for(i in unique(lichens_pm$PlotID)){
+	use_obs = Xdata$PlotID==i
+	mod = glm(Y~Bryophytes, data=Xdata, family='binomial', subset=use_obs)
+	mod_func = function(x) predict(mod, data.frame(Bryophytes=x), type='response')
+
+	curve(mod_func(x), from=0, to = 5, add=T, lwd=2)
+}
+for(i in unique(lichens_pm$Ecoregion)){
+	use_obs = Xdata$Ecoregion==i
+	mod = glm(Y~Bryophytes, data=Xdata, family='binomial', subset=use_obs)
+	mod_func = function(x) predict(mod, data.frame(Bryophytes=x), type='response')
+
+	curve(mod_func(x), from=0, to = 5, add=T, lwd=2, col=2)
+}
+
 
 ## Models with random effect of plot
-mod1 = glmer(Y ~ N_avg + (N_avg|PlotID), data=Xdata, family='binomial')
-mod2 = glmer(Y ~ N_avg + (1|PlotID), data=Xdata, family='binomial')
+mod1 = glmer(Y ~ N + (N|PlotID), data=Xdata, family='binomial')
+mod2 = glmer(Y ~ N + (1|PlotID), data=Xdata, family='binomial')
+anova(mod1, mod2) # decide whether random effect of plot indicated:
+
+mod1 = glmer(Y ~ Bryophytes + (Bryophytes|PlotID), data=Xdata, family='binomial')
+mod2 = glmer(Y ~ Bryophytes + (1|PlotID), data=Xdata, family='binomial')
 anova(mod1, mod2)
 
-crust_mod = glmer(Y ~ N_avg + (1|PlotID), data=Xdata, family='binomial')
-asex_mod = glmer(Y ~ N_avg + (N_avg|PlotID), data=Xdata, family='binomial')
+# Define models
+crust_mod = glmer(Y ~ N + (1|PlotID), data=Xdata, family='binomial')
+asex_mod = glmer(Y ~ N + (N|PlotID), data=Xdata, family='binomial')
+
+crust_mod_bryo = glmer(Y ~ Bryophytes + (1|PlotID), data=Xdata, family='binomial')
 
 # Generate null model
-mod_null = glmer(Y ~ 1+ (1|PlotID), data=Xdata, family='binomial')
+mod_null = glmer(Y ~ 1 + (1|PlotID), data=Xdata, family='binomial')
+anova(crust_mod_bryo, mod_null)
+anova(crust_mod, mod_null)
 
 ## Models with random effect of tree species
 # Drop samples on tree species with < 10 samples observed across the data set
@@ -974,7 +1253,6 @@ anova(mod_tree1, mod_tree2)
 
 crust_mod_tree = glmer(Y ~ N_avg + (1|TreeTaxonID), family='binomial', data=Xdata, subset=keep_obs)
 asex_mod_tree = glmer(Y ~ N_avg + (N_avg|TreeTaxonID), family='binomial', data=Xdata, subset=keep_obs)
-
 
 # Generate null model
 mod_null_tree = glmer(Y ~ 1+ (1|TreeTaxonID), data=Xdata, family='binomial', subset=keep_obs)
@@ -1029,15 +1307,22 @@ Y = sampXtrait_abun[,'Attachment'] # Make sure this is log-transformed from abov
 Xdata = Xdata[names(Y),]
 
 ## Models with random effect of plot
-mod1 = lmer(Y ~ N_avg + (N_avg|PlotID), data=Xdata)
-mod2 = lmer(Y ~ N_avg + (1|PlotID), data=Xdata)
+mod1 = lmer(Y ~ N + (N|PlotID), data=Xdata)
+mod2 = lmer(Y ~ N + (1|PlotID), data=Xdata)
 anova(mod1, mod2)
 
-attach_mod = lmer(Y ~ N_avg + (N_avg|PlotID), data=Xdata)
+mod1 = lmer(Y ~ Bryophytes + (Bryophytes|PlotID), data=Xdata)
+mod2 = lmer(Y ~ Bryophytes + (1|PlotID), data=Xdata)
+anova(mod1, mod2)
 
+attach_mod = lmer(Y ~ N + (N|PlotID), data=Xdata)
+attach_mod_bryo = lmer(Y ~ Bryophytes + (Bryophytes|PlotID), data=Xdata)
 
 # Generate null model
-mod_null = lmer(Y ~ 1+ (1|PlotID), data=Xdata)
+mod_null = lmer(Y ~ 1 + (1|PlotID), data=Xdata)
+
+anova(attach_mod, mod_null)
+anova(attach_mod_bryo, mod_null)
 
 ## Models with random effect of tree species
 # Drop samples on tree species with < 10 samples observed across the data set
@@ -1099,6 +1384,372 @@ mtext(mylabel2, 3, 0, adj=0)
 dev.off()
 
 
+
+## Manuscript Figure: predicted attachment height and crutose lichens with N and Bryophytes
+mod_func = function(mod, x, PID=NA, logT=F){
+	
+	if(is.na(PID)){
+		use_df = data.frame(Pred=x)
+		names(use_df) = names(mod@frame)[2]
+		ypred = predict(mod, use_df, type='response', re.form=NA)
+	} else {
+		use_df = data.frame(Pred=x, PlotID=PID)
+		names(use_df)[1] = names(mod@frame)[2]
+		ypred = predict(mod, use_df, type='response')
+	}
+	if(logT){
+		ypred = exp(ypred)
+	} else {
+		ypred = ypred*1
+	}
+}
+
+# Remake data tables
+Xdata = merge(reproduction_pm[,c('SampID','N','S')], samples[,c('Bryophytes', scale_vars,'TreeTaxonID')], all.x=T)
+Xdata$N = Xdata$N/9
+rownames(Xdata) = Xdata$SampID
+Xdata$Bryophytes = unclass(Xdata$Bryophytes) - 1
+
+# Color by trait diversity z-scores:
+load('trait_diversity.RData')
+blue2red = apply(read.csv('../../blue2red_10colramp.txt'), 1, function(x) rgb(x[1],x[2],x[3],maxColorValue=255))
+blue2red = rev(blue2red)
+
+
+pdf('./Figures/total abun and bryo vs attachment and crustose color by z-score.pdf', height=5, width=7.5)
+layout(matrix(1:6, nrow=2, byrow=T), widths=c(0.45, 0.45, 0.1))
+par(mar=c(.2, 2.5, 1.5, .5))
+par(oma=c(3.5,3,0,1))
+
+# Attachment ~ N
+yvals = exp(sampXtrait_abun[,'Attachment'])
+
+#range(trait_div[,c('Attachment'),'Z'], na.rm=T)
+use_breaks = c(-4.1, seq(-4, 4, .5), 4.1)
+use_col = colorRampPalette(blue2red)(length(use_breaks)-1)
+use_col = paste(use_col, 'A0', sep='')
+colvals = use_col[cut(trait_div[names(yvals),'Attachment','Z'],use_breaks)]
+colvals[is.na(colvals)] = '#000000A0'
+
+xvals = Xdata[names(yvals),'N']
+plot(xvals, yvals, pch=16, col=colvals, las=1, ylab='', 
+	xlab='', axes=F)
+axis(2, las=1)
+box()
+
+for(i in unique(Xdata$PlotID)){
+	Nrange = range(subset(Xdata, PlotID==i)$N)
+	curve(mod_func(attach_mod, x, i, logT=T), from=Nrange[1], to=Nrange[2], add=T, lwd=1, col='grey50')
+}
+curve(mod_func(attach_mod, x, logT=T), add=T, lwd=3)
+mtext('A', 3, 0, adj=0)
+mtext('Attachment', 2, 3)
+
+# Attachment ~ Bryo
+xvals = Xdata[names(yvals),'Bryophytes']
+plot(xvals, yvals, pch=16, col=colvals, las=1, ylab='', 
+	xlab='', axes=F)
+axis(2, las=1)
+box()
+
+for(i in unique(Xdata$PlotID)){
+	Xrange = range(subset(Xdata, PlotID==i)$Bryophytes)
+	curve(mod_func(attach_mod_bryo, x, i, logT=T), from=Xrange[1], to=Xrange[2], add=T, lwd=1, col='grey50')
+}
+curve(mod_func(attach_mod_bryo, x, logT=T), add=T, lwd=3)
+mtext('B', 3, 0, adj=0)
+
+# Legend
+par(mar=c(.2, .5, 1.5, 2.5))
+z=matrix(1:(length(use_breaks)-1),nrow=1)
+x=1
+y=use_breaks 
+image(x,y,z,col=use_col,axes=FALSE,xlab="",ylab="")
+axis(4, las=1)
+
+# Prop. crustose ~ N
+par(mar=c(.2, 2.5, 1.5, .5))
+yvals = crust_abun[,1] / crust_abun[,2]
+
+#range(trait_div[,c('Form'),'Z'], na.rm=T)
+use_breaks = seq(-3, 3, .5)
+use_col = colorRampPalette(blue2red)(length(use_breaks)-1)
+use_col = paste(use_col, 'A0', sep='')
+colvals = use_col[cut(trait_div[names(yvals),'Form','Z'],use_breaks)]
+colvals[is.na(colvals)] = '#000000A0'
+
+xvals = Xdata[names(yvals),'N']
+plot(xvals, yvals, pch=16, col=colvals, las=1, ylab='', 
+	xlab='', axes=F)
+axis(2, las=1)
+box()
+
+for(i in unique(Xdata$PlotID)){
+	Nrange = range(subset(Xdata, PlotID==i)$N)
+	curve(mod_func(crust_mod, x, i), from=Nrange[1], to=Nrange[2], add=T, lwd=1, col='grey50')
+}
+curve(mod_func(crust_mod, x), add=T, lwd=3)
+mtext('C', 3, 0, adj=0)
+mtext('Prop. Crustose', 2, 3)
+
+axis(1, at=0:5, labels=9*(0:5))
+mtext(expression(N[TOT]), 1, 2.5)
+
+# Prop. crustose ~ Bryophytes
+xvals = Xdata[names(yvals),'Bryophytes']
+plot(xvals, yvals, pch=16, col=colvals, las=1, ylab='', 
+	xlab='', axes=F)
+axis(2, las=1)
+box()
+
+for(i in unique(Xdata$PlotID)){
+	Xrange = range(subset(Xdata, PlotID==i)$Bryophytes)
+	curve(mod_func(crust_mod_bryo, x, i), from=Xrange[1], to=Xrange[2], add=T, lwd=1, col='grey50')
+}
+curve(mod_func(crust_mod_bryo, x), add=T, lwd=3)
+mtext('D', 3, 0, adj=0)
+
+axis(1, at=c(0:5), labels=levels(Xdata$Bryophytes))
+mtext('Bryophyte Cover', 1, 2.5)
+
+# Legend
+par(mar=c(.2, .5, 1.5, 2.5))
+z=matrix(1:(length(use_breaks)-1),nrow=1)
+x=1
+y=use_breaks
+image(x,y,z,col=use_col,axes=FALSE,xlab="",ylab="")
+axis(4, las=1)
+
+dev.off()
+
+################################################################################
+### Trait Diversity ###
+
+library(abind)
+
+## Calculate observed trait diversity within each sample for:
+# Attachment, LobeDissect, Reproductive mode, Growth Form
+groupby = lichens_pm$SampID
+Nby = lichens_pm$AbunCount
+
+attach_div = calc_trait_div(lichens_pm$Attachment + 1, Nby, groupby,  'numeric')
+dissect_div = calc_trait_div(lichens_pm$LobeDissect, Nby, groupby, 'numeric')
+asco_div = calc_trait_div(lichens_pm$Asco, Nby, groupby, 'symm')
+asex_div = calc_trait_div(lichens_pm$Asexual, Nby, groupby, 'symm')
+form_div = calc_trait_div(lichens_pm$Form, Nby, groupby, 'factor')
+
+## Calculate expected trait diversity null distributions
+reps = 1000
+attach_nulls = calc_trait_div_null(reps, lichens_pm$Attachment + 1, Nby, groupby,  'numeric')
+dissect_nulls = calc_trait_div_null(reps, lichens_pm$LobeDissect, Nby, groupby, 'numeric')
+asco_nulls = calc_trait_div_null(reps, lichens_pm$Asco, Nby, groupby, 'symm')
+asex_nulls = calc_trait_div_null(reps, lichens_pm$Asexual, Nby, groupby, 'symm')
+form_nulls = calc_trait_div_null(reps, lichens_pm$Form, Nby, groupby, 'factor')
+
+## Calculate expected null crustose and fruticose proportions and reproductive mode proportions
+
+form_prop = form_abun / rowSums(form_abun)
+form_prop = form_prop[names(form_div),]
+form_prop_nulls = sapply(1:reps, function(i){
+	neworder = sample(lichens_pm$Form, nrow(lichens_pm), replace=F)
+	newtab = xtabs(Nby ~ groupby+neworder)
+	newtab = newtab/rowSums(newtab)
+	newtab
+}, simplify='array')
+
+rep_prop = rep_abun / rowSums(rep_abun)
+rep_prop = rep_prop[names(asco_div),]
+rep_prop_nulls = sapply(1:reps, function(i){
+	neworder = sample(nrow(lichens_pm), replace=F)
+	newrep = lichens_pm[neworder, c('Asco','Asexual')]
+	newasco = xtabs(Nby ~ groupby+newrep[,'Asco'])
+	newasco = newasco[,'TRUE']/rowSums(newasco)
+	newasex = xtabs(Nby ~ groupby+newrep[,'Asexual'])
+	newasex = newasex[,'TRUE']/rowSums(newasex)
+	newtab = cbind(newasco, newasex)
+	colnames(newtab) = c('Asco','Asexual')
+	newtab
+}, simplify='array')
+
+save(attach_nulls, dissect_nulls, asco_nulls, asex_nulls, form_nulls, form_prop_nulls, rep_prop_nulls, file='trait_diversity_nulls.RData')
+
+## Calculate P-values and z-scores of observed trait diversity based on nulls
+
+# Assumes nulls and obs are all in same order (by SampID)
+trait_div = array(NA, dim=c(length(attach_div), 9, 3), 
+	dimnames=list(SampID=names(attach_div), Trait=c('Attachment','LobeDissect','Asco','Asexual','Form','PropCrust','PropFrut','PropAsco','PropAsex'),
+		Statistic=c('Obs','Z','P')))
+calc_pz = function(val, null) c(calc_p(val, null), calc_z(val, null))
+
+for(i in dimnames(trait_div)[[1]]){
+	trait_div[i,'Attachment',c('P','Z')] = calc_pz(attach_div[i], attach_nulls[i,])
+	trait_div[i,'LobeDissect',c('P','Z')] = calc_pz(dissect_div[i], dissect_nulls[i,])
+	trait_div[i,'Asco',c('P','Z')] = calc_pz(asco_div[i], asco_nulls[i,])
+	trait_div[i,'Asexual',c('P','Z')] = calc_pz(asex_div[i], asex_nulls[i,])
+	trait_div[i,'Form',c('P','Z')] = calc_pz(form_div[i], form_nulls[i,])	
+	trait_div[i,'PropCrust',c('P','Z')] = calc_pz(form_prop[i,'crustose'], form_prop_nulls[i,'crustose',])
+	trait_div[i,'PropFrut',c('P','Z')] = calc_pz(form_prop[i,'fruticose'], form_prop_nulls[i,'fruticose',])
+	trait_div[i,'PropAsco',c('P','Z')] = calc_pz(rep_prop[i,'sexual'], rep_prop_nulls[i,'Asco',])
+	trait_div[i,'PropAsex',c('P','Z')] = calc_pz(rep_prop[i,'asexual'], rep_prop_nulls[i,'Asexual',])
+}
+
+trait_div[names(attach_div),'Attachment','Obs'] = attach_div
+trait_div[names(dissect_div),'LobeDissect','Obs'] = dissect_div
+trait_div[names(asco_div),'Asco','Obs'] = asco_div
+trait_div[names(asex_div),'Asexual','Obs'] = asex_div
+trait_div[names(form_div),'Form','Obs'] = form_div
+trait_div[,'PropCrust','Obs'] = form_prop[dimnames(trait_div)[[1]],'crustose']
+trait_div[,'PropFrut','Obs'] = form_prop[dimnames(trait_div)[[1]],'fruticose']
+trait_div[,'PropAsco','Obs'] = rep_prop[dimnames(trait_div)[[1]],'sexual']
+trait_div[,'PropAsex','Obs'] = rep_prop[dimnames(trait_div)[[1]],'asexual']
+
+save(trait_div, file='trait_diversity.RData')
+
+## Convergence in water/competitive traits?
+use_traits = c('Attachment','LobeDissect','Form','PropCrust','PropFrut')
+use_env = c('WaterCapacity','Bryophytes','CloudFreq_mean','VPD_max','OpenPos')
+use_data = data.frame(samples_pm[dimnames(trait_div)[[1]], use_env], N=reproduction[dimnames(trait_div)[[1]],'N'])
+
+use_col = c('#00000055','red')
+
+par(mfrow=c(length(use_traits),length(use_env)+1 ))
+par(mar=c(2,2,.5,.5))
+par(oma=c(4,4,0,0))
+for(i in use_traits){
+for(j in c('N',use_env)){
+	colorby = (trait_div[,i,'P'] < 0.05) + 1
+	plot(trait_div[,i,'Z'] ~ as.numeric(use_data[,j]), xlab=j, ylab=i, pch=16, col=use_col[colorby])
+	abline(h=c(0,2,-2), lty=2, col='grey')
+	mod = lm(trait_div[,i,'Z'] ~ as.numeric(use_data[,j]))
+	if(coef(summary(mod))[2,4] <0.05){
+		abline(mod, lwd=2, col=2)
+	}
+}}
+
+# Slight evidence that trait diversity increases and prop crustose with lichen abundance
+# Slight evidence for convergence in attachment with fewer Bryophytes and drier sites
+# Slight evidence for higher that expected PropCrustose with fewer bryophytes and in drier climates
+# Slight evidence that growith form diversity increases with bryophyte abundance and in wetter climates
+# No evidence for convergence in lob dissection
+# If anything, water limitation imposes constraint, no competition
+
+
+
+## Convergence in reproductive modes with substrate stability?
+plot(trait_div[,'PropAsco','Z'], trait_div[,'PropAsex','Z'])
+
+samp_order = dimnames(trait_div)[[1]]
+colorby = (trait_div[,'Asexual','P'] < 0.05) + 1
+plot(trait_div[,'Asexual','Z'] ~ as.numeric(samples_pm[samp_order,'Shedding']), pch=16, col=use_col[colorby])
+plot(trait_div[,'Asexual','Z'] ~ reproduction[samp_order, 'Asex_abun'], pch=16, col=use_col[colorby])
+
+colorby = (trait_div[,'PropAsex','P'] < 0.05) + 1
+plot(trait_div[,'PropAsex','Z'] ~ as.numeric(samples_pm[samp_order,'Shedding']), pch=16, col=use_col[colorby])
+abline(h=0)
+
+colorby = (trait_div[,'Asco','P'] < 0.05) + 1
+plot(trait_div[,'Asco','Z'] ~ as.numeric(samples_pm[samp_order,'Shedding']), pch=16, col=use_col[colorby])
+plot(trait_div[,'Asco','Z'] ~ reproduction[samp_order, 'Asco_abun'], pch=16, col=use_col[colorby])
+
+# no evidence that reproductive prevalence is constrained
+
+
+## Figures for SI:
+
+samp_order = dimnames(trait_div)[[1]]
+
+# Asex, PropAsex ~ Shedding
+pdf('./Figures/asex diversity vs bark stability.pdf', height=5, width=5)
+par(mfrow=c(2,1))
+par(mar=c(.5,5,1,1))
+par(oma=c(3,0,0,0))
+colorby = (trait_div[,'Asexual','P'] < 0.05) + 1
+plot(trait_div[,'Asexual','Z'] ~ as.numeric(samples_pm[samp_order,'Shedding']), 
+	pch=16, col=use_col[colorby], xlab='', ylab='z-score', axes=F)
+axis(2, las=1); box()
+mtext('A',3,0,adj=0)
+abline(h=c(-1.96,0,1.96), lty=2, col='grey30')
+colorby = (trait_div[,'PropAsex','P'] < 0.05) + 1
+plot(trait_div[,'PropAsex','Z'] ~ as.numeric(samples_pm[samp_order,'Shedding']), 
+	pch=16, col=use_col[colorby], xlab='', ylab='z-score', las=1)
+abline(h=c(-1.96,0,1.96), lty=2, col='grey30')
+mtext('B',3,0,adj=0)
+mtext('Bark instability', 1, 2.5)
+dev.off()
+
+# Attachment ~ N, Bryophytes, VPD
+pdf('./Figures/attachment diversity vs env.pdf', height=3, width=7.8)
+par(mfrow=c(1,3))
+par(mar=c(4.1,.5,1.5,.5))
+par(oma=c(0,3,0,0))
+colorby = (trait_div[,'Attachment','P'] < 0.05) + 1
+yvals = trait_div[,'Attachment','Z']
+plot(yvals ~ reproduction[samp_order,'N'], 
+	pch=16, col=use_col[colorby], xlab=expression(N[TOT]), ylab='', las=1)
+mtext('A',3,0,adj=0)
+mtext('z-score', 2, 2, cex=.8)
+abline(h=c(-1.96,0,1.96), lty=2, col='grey30')
+
+plot(yvals ~ as.numeric(samples_pm[samp_order,'Bryophytes']), 
+	pch=16, col=use_col[colorby], xlab='Bryophyte cover', ylab='', las=1, axes=F)
+abline(h=c(-1.96,0,1.96), lty=2, col='grey30')
+axis(1, at=1:6, labels=levels(samples$Bryophytes))
+box()
+mtext('B',3,0,adj=0)
+
+plot(yvals ~ samples_pm[samp_order,'VPD_max'], 
+	pch=16, col=use_col[colorby], xlab='VPD', ylab='', las=1, axes=F)
+abline(h=c(-1.96,0,1.96), lty=2, col='grey30')
+axis(1, at=8:17)
+box()
+mtext('C',3,0,adj=0)
+
+dev.off()
+
+# LobeDissect ~ VPD
+pdf('./Figures/lobe dissect diversity vs env.pdf', height=3.5, width=3.5)
+par(mar=c(4.1,4.1,.5,.5))
+colorby = (trait_div[,'LobeDissect','P'] < 0.05) + 1
+plot(trait_div[,'LobeDissect','Z']~ samples_pm[samp_order,'VPD_max'], 
+	pch=16, col=use_col[colorby], xlab='VPD', ylab='z-score', las=1)
+abline(h=c(-1.96,0,1.96), lty=2, col='grey30')
+dev.off()
+
+# Form, PropCrust, PropFrut ~ N, Bryophytes, VPD
+# Make sure to load use_data from above
+use_traits = c('Form','PropCrust','Prop)
+use_ynames = c('Growth form diversity','Prop. crustose','Prop. fruticose')
+use_env = c('N','Bryophytes','VPD_max')
+use_xnames=c('N[TOT]','Bryophyte~~cover','VPD')
+
+pdf('./Figures/growth form diversity vs env.pdf', height=7.8, width=7.8)
+par(mfrow=c(3,3))
+par(mar=c(.5,.5,.5,.5))
+par(oma=c(4,4,0,0))
+for(i in 1:3){
+	yvals = trait_div[,use_traits[i],'Z']
+	colorby = (trait_div[,use_traits[i],'P']<0.05) + 1
+	for(j in 1:3){
+		plot(yvals ~ as.numeric(use_data[,use_env[j]]), pch=16, col=use_col[colorby], xlab='', ylab='', axes=F)
+		abline(h=c(-1.96,0,1.96), lty=2, col='grey30')
+		box()
+		if(j==1){
+			axis(2, las=1)
+			mtext(use_ynames[i], 2, 3)
+		}
+		if(i==3){
+			mtext(parse(text=use_xnames[j]), 1, 3)
+			if(j==1) axis(1)
+			if(j==2) axis(1, at=1:6, labels=levels(use_data$Bryophytes))
+			if(j==3) axis(1, at=8:17)
+		}
+}}
+dev.off()
+
+
+##
+
+# Make Table for SI
 
 
 
@@ -1370,7 +2021,7 @@ samples$N_tot = N_tot
 samples$N_avg = N_avg
 
 ## Convert ordered factors to numeric for models
-samples$Bryophytes = as.numeric(samples$Bryophytes)
+samples$Bryophytes = as.numeric(samples$Bryophytes)-1
 samples$Shedding = as.numeric(samples$Shedding)
 
 ## Add reproduction variables
@@ -1380,47 +2031,145 @@ use_data = samples
 use_data = merge(use_data, reproduction, all.x=T, all.y=F)
 rownames(use_data) = use_data$SampID
 
-## Plot lichen abundance versus environmental predictors
+# Subset to just Piedmont and Mountains plots
+samples_pm = subset(samples, SiteID!='Bladen')
+samples_pm = droplevels(samples_pm)
 
-plot(N_avg~N_tot, data=samples)
-plot(N_tot~DBH, data=samples, log='x')
-plot(N_tot~Trans_tot_cor, data=samples)
-plot(N_tot~ Elevation, data=samples)
+
+## Plot lichen abundance versus environmental predictors
+plot(N_avg~N_tot, data=samples_pm)
+plot(N_tot~DBH, data=samples_pm, log='x')
+plot(N_tot~Trans_tot_cor, data=samples_pm)
+plot(N_tot~ Elevation, data=samples_pm)
 
 # Covariates 
 bark_covars = c('FurrowDepth','Bryophytes','pH','Shedding','Density','Angle')
 other_covars = c('Trans_tot_cor','OpenPos','Elevation')
 
-tot_abun_mod = glm(N_tot~., data=samples[,c(other_covars, bark_covars, 'DBH')], family=poisson(link='log'))
-tot_abun_mod_dropDBH = glm(N_tot~., data=samples[,c(other_covars, bark_covars)], family=poisson(link='log'))
+tot_abun_mod = glm(N_tot~., data=samples_pm[,c('N_tot', other_covars, bark_covars, 'DBH')], family=poisson(link='log'))
+tot_abun_mod_dropDBH = glm(N_tot~., data=samples_pm[,c('N_tot', other_covars, bark_covars)], family=poisson(link='log'))
 
 summary(tot_abun_mod)
 anova(tot_abun_mod, tot_abun_mod_dropDBH, test='Chisq')
+exp(coef(tot_abun_mod))
 
 start_parms = c(3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
-avg_abun_mod = glm(N_avg~., data=samples[,c(other_covars, bark_covars, 'DBH')], family=gaussian(link='log'), start=start_parms)
+avg_abun_mod = glm(N_avg~., data=samples_pm[,c('N_avg', other_covars, bark_covars, 'DBH')], family=gaussian(link='log'), start=start_parms)
 start_parms = c(3, 0, 0, 0, 0, 0, 0, 0, 0 ,0,0)
-avg_abun_mod_dropDBH = glm(N_avg~., data=samples[,c(other_covars, bark_covars, 'DBH')], family=gaussian(link='log'), start=start_parms)
+avg_abun_mod_dropDBH = glm(N_avg~., data=samples_pm[,c('N_avg', other_covars, bark_covars, 'DBH')], family=gaussian(link='log'), start=start_parms)
 
 summary(avg_abun_mod)
 anova(avg_abun_mod, avg_abun_mod_dropDBH, test='Chisq')
 
 
 # Scale variables to similar variance to improve convergence
-scaled_data = samples
+scaled_data = samples_pm
 scaled_data$Elevation = scaled_data$Elevation/1000
 scaled_data$DBH = scaled_data$DBH/10
 scaled_data$OpenPos = scaled_data$OpenPos/10
 scaled_data$Angle = scaled_data$Angle/10
 scaled_data$FurrowDepth = scaled_data$FurrowDepth/10
 
-# Fit random slopes model
-tot_abun_mod_plot = glmer(N_tot~FurrowDepth+Angle+pH+Density+Bryophytes+Shedding+Trans_tot_cor+OpenPos+Elevation+DBH + (DBH|SiteID/PlotID), data=scaled_data, family=poisson(link='log'))
+## Fit random slopes model - HAS TROUBLE CONVERGING WITH SAMPLES_PM
+tot_abun_mod_plot = glmer(N_tot~FurrowDepth+Angle+pH+Density+Bryophytes+Shedding+Trans_tot_cor+OpenPos+Elevation+DBH + (DBH|PlotID), data=scaled_data, family=poisson(link='log'))
 summary(tot_abun_mod_plot) # Site and Plot doen't affect Abun~DBH much
 
 # Fit random intercepts model - HAS TROUBLE CONVERGING
 tot_abun_mod_plot = glmer(N_tot~FurrowDepth+Angle+pH+Density+Bryophytes+Shedding+Trans_tot_cor+OpenPos+Elevation+DBH + (1|SiteID/PlotID), data=scaled_data, family=poisson(link='log'))
 summary(tot_abun_mod_plot) # Although there are differences in abundance across sites
+
+## Fit random slopes models for different tree species
+# Drop samples on tree species with < 10 samples observed across the data set
+treefreq = table(samples_pm$TreeTaxonID)
+keep_trees = names(treefreq[treefreq>=10]) # 5 trees, be careful with num predictors
+keep_obs = samples_pm$TreeTaxonID %in% keep_trees # works b/c scaled_data made from samples_pm
+
+mod_tree1 = glmer(N_tot ~ N_avg + (N_avg|TreeTaxonID), family='binomial', data=Xdata, subset=keep_obs)
+mod_tree2 = glmer(Y ~ N_avg + (1|TreeTaxonID), family='binomial', data=Xdata, subset=keep_obs)
+anova(mod_tree1, mod_tree2)
+
+mod_tree2 = glmer(N_tot ~ Trans_tot_cor + OpenPos + Elevation + DBH + (DBH|TreeTaxonID), family='poisson', data=scaled_data, subset=keep_obs)
+mod_tree1 = glmer(N_tot ~ Trans_tot_cor + OpenPos + Elevation + DBH + (1|TreeTaxonID), family='poisson', data=scaled_data, subset=keep_obs)
+mod_tree0 = glm(N_tot ~ Trans_tot_cor + OpenPos + Elevation + DBH, family='poisson', data=scaled_data, subset=keep_obs)
+
+mod_tree2 = glmer(N_tot ~ FurrowDepth + Bryophytes + pH + Shedding + Density + DBH + (DBH|TreeTaxonID), family='poisson', data=scaled_data, subset=keep_obs)
+mod_tree1 = glmer(N_tot ~ FurrowDepth + Bryophytes + pH + Shedding + Density + DBH + (1|TreeTaxonID), family='poisson', data=scaled_data, subset=keep_obs)
+mod_tree0 = glm(N_tot ~ FurrowDepth + Bryophytes + pH + Shedding + Density + DBH, family='poisson', data=scaled_data, subset=keep_obs)
+
+AIC(mod_tree2, mod_tree1, mod_tree0)
+anova(mod_tree2, mod_tree1) # Different tree species have different slopes, even when controlling for sample and plot scale vars
+
+# Generate null model
+mod_null_tree = glmer(N_tot ~ Trans_tot_cor + OpenPos + Elevation + (1|TreeTaxonID), data=scaled_data, family='poisson', subset=keep_obs)
+
+# Plot effect
+use_col = c('grey50','red')
+
+yvals = samples_pm[keep_obs,'N_tot']
+
+# Identify species for which abundance increases
+tree_ests = ranef(mod_tree2)$TreeTaxonID
+pos_trees = rownames(subset(tree_ests, DBH >0))
+tree_order = rownames(tree_ests)[order(tree_ests$DBH)]
+
+# Confindence intervals for random effects?
+ci = confint(mod_tree2, type='wald')
+
+svg('./Figures/N_tot vs DBH for different tree species.svg', height=5.5, width=5.5)
+par(lend=1)
+plot(yvals~DBH, data=scaled_data[keep_obs,], pch=16, col='#00000050', ylab=expression(N[TOT]), 
+	xlab='Tree Diameter (cm)', axes=F)
+axis(2, las=1)
+axis(1, at=seq(0,8,2), labels=10*seq(0,8,2))
+box()
+
+#for(i in keep_trees){
+#	use_obs = scaled_data$TreeTaxonID==i
+#	xrange = scaled_data[use_obs, 'DBH']
+#	envmeans = colMeans(mod_tree2@frame[,other_covars]) # using means of variables for all tree species
+#	envmeans = scaled_data[use_obs, other_covars] # using means of variables for this tree species
+#	mod_func = function(x) predict(mod_tree2, data.frame(DBH=x, TreeTaxonID=i, t(envmeans)), type='response')
+#	curve(mod_func(x), from=xrange[1], to=xrange[2], add=T, lwd=2, col=use_col[1+(i %in% pos_trees)])
+#	#if(i %in% pos_trees) text(xrange[2], 30, labels=nrow(subset(scaled_data, TreeTaxonID==i)), pos=4, col=2)
+#}
+
+# Fitting separate means models
+# Decided to show prediction without covariates, but other options are commented out and available
+for(i in tree_order){
+	use_obs = scaled_data$TreeTaxonID==i
+	#mod = glm(N_tot ~ Trans_tot_cor + OpenPos + Elevation + DBH, family='poisson', data=scaled_data, subset=use_obs)
+	#mod0 = glm(N_tot ~ Trans_tot_cor + OpenPos + Elevation, family='poisson', data=scaled_data, subset=use_obs)
+	#mod = glm(N_tot ~ FurrowDepth + Bryophytes + pH + Shedding + Density + DBH, family='poisson', data=scaled_data, subset=use_obs)
+	#mod0 = glm(N_tot ~ FurrowDepth + Bryophytes + pH + Shedding + Density, family='poisson', data=scaled_data, subset=use_obs)
+	mod = glm(N_tot ~ DBH, family='poisson', data=scaled_data[use_obs,])
+	mod0 = glm(N_tot ~ 1, family='poisson', data=scaled_data[use_obs,])
+	sig = anova(mod0, mod, test='Chisq')[2,'Pr(>Chi)'] < 0.05
+	sign = coef(mod)['DBH'] < 0
+
+	xrange = range(mod$model$DBH)
+	xpred = seq(xrange[1],xrange[2], .01)
+	#envmeans = colMeans(mod$model[,2:(ncol(mod$model)-1)])
+	#envmeans = colMeans(mod$model[,other_covars])
+	#ypred = predict(mod, data.frame(DBH=xpred, t(envmeans)), type='response')
+	#envmeans = mean(mod$model[,'Trans_tot_cor'])
+	#ypred = predict(mod, data.frame(DBH=xpred, Trans_tot_cor=envmeans), type='response')
+	ypred = predict(mod, data.frame(DBH=xpred), type='response')
+	lines(xpred, ypred, col=ifelse(sig, ifelse(sign, 'red3','blue3'), 'grey50'), lwd=2)
+	
+	if(sig&!sign) text(xrange[2], ypred[length(ypred)], labels=strsplit(i, '_')[[1]][1], pos=4, col='black')
+	#if(sig&sign) print(i)
+}
+
+# Add prediction for random-slopes model
+# Make sure mod_tree2 has the right predictors (bark-level)
+mod_data = mod_tree2@frame
+envmeans = colMeans(mod_data[,!(colnames(mod_data) %in% c('DBH','TreeTaxonID','N_tot'))])
+mod_func = function(x) predict(mod_tree2, data.frame(DBH=x, t(envmeans)), type='response', re.form=NA)
+curve(mod_func(x), add=T, lwd=4)
+
+dev.off()
+
+
 
 ## How does successively decreasing tree sizes affect coef estimate for DBH?
 sm_mods = sapply(4:max(use_data$DBH), function(thresh){
@@ -1513,31 +2262,50 @@ curve(predict(tot_abun_mod_sm, data.frame(DBH=x, FurrowDepth=4, Angle=0, pH=6.3,
 dev.off()
 
 
+## Manuscript Figure
 # Total abundance plot including predictions for reproductive mode
-tot_abun_mod = glm(N_tot~., data=samples[,c(other_covars, 'DBH')], family=poisson(link='log'))
+
+# Subset to just Piedmont and Mountains plots
+use_data = samples
+use_data = merge(use_data, reproduction, all.x=T, all.y=F)
+rownames(use_data) = use_data$SampID
+use_data = subset(use_data, SiteID!='Bladen')
+use_data = droplevels(use_data)
+
+tot_abun_mod = glm(N_tot~., data=use_data[,c('N_tot', other_covars, 'DBH')], family=poisson(link='log'))
 rep_response = c('asco','asex')
-mycol=c('#ff6600','#5f8dd3','grey40')
+mycol= c('#ff6600','#5f8dd3','#000000')
+mycol_trans = paste(mycol, '80', sep='')
 mylty=c(2,1)
 
-pdf('./Figures/Tot N and reproduction vs DBH models no bark covars log.pdf', height=5, width=5)
+envmeans = colMeans(tot_abun_mod$model[,c('Trans_tot_cor','OpenPos','Elevation')])
+mod_func = function(use_mod, x){
+	yvals = predict(use_mod, data.frame(DBH=x, t(envmeans)), type='response', se.fit=T)
+	yvals$fit + t(qnorm(c(0.025,0.5, 0.975)) %*% t(yvals$se.fit))
+}
+
+svg('./Figures/Tot N and reproduction vs DBH models no bark covars.svg', height=4, width=4)
 par(lend=1)
 par(mar=c(4,4,1,1))
-plot(N_tot~DBH, data=use_data, las=1, pch=16, xlab='Tree Diameter (cm)', 
-	ylab='Lichen Abundance', col='#00000044', log='x')
+plot(N_tot~DBH, data=use_data, las=1, pch=16, xlab='Tree DBH (cm)', 
+	ylab=expression(N[TOT]), col='#00000044') #, log='x'
 
-N_tot_func = function(x) predict(tot_abun_mod, data.frame(DBH=x, Trans_tot_cor=0, OpenPos=84, Elevation=500), type='response') #FurrowDepth=4, Angle=0, pH=6.3, Density=0.5, Bryophytes=3, Shedding=2, 
-curve(N_tot_func,	lwd=4, col='black', add=T, from=3, to=79)
+xvals = seq(3,79, length.out=200)
+ypred = mod_func(tot_abun_mod, xvals)
+#polygon(c(xvals, rev(xvals)), c(ypred[,1], rev(ypred[,3])), col=mycol_trans[3], border=NA)
+lines(xvals, ypred[,2], lwd=2, col=mycol[3])
 
 for(i in 1:length(rep_response)){
 	yvar=paste(capitalize(rep_response[i]),'abun', sep='_')	
-	x = cbind(use_data[,yvar], use_data$N-use_data[,yvar])
-	prop_mod = glm(x ~ ., data=use_data[,c(other_covars,'DBH')], family=binomial(link='logit'))
-	prop_mod0 = glm(x ~ ., data=use_data[,c(other_covars)], family=binomial(link='logit'))
+	y = cbind(use_data[,yvar], use_data$N-use_data[,yvar])
+	prop_mod = glm(y ~ ., data=use_data[,c(other_covars,'DBH')], family=binomial(link='logit'))
+	prop_mod0 = glm(y ~ ., data=use_data[,c(other_covars)], family=binomial(link='logit'))
 
 	signif = anova(prop_mod0, prop_mod, test='Chisq')[2,'Pr(>Chi)']<=0.05	
 
-	rep_tot_func = function(z) N_tot_func(z)*predict(prop_mod, data.frame(DBH=z, Trans_tot_cor=0, OpenPos=84, Elevation=500), type='response') #FurrowDepth=4, Angle=0, pH=6.3, Density=0.5, Bryophytes=3, Shedding=2, 
-	curve(rep_tot_func, from=3, to=79, lwd=4, col=mycol[i], add=T, lty=mylty[signif+1])
+	ypred = mod_func(tot_abun_mod, xvals)*N_tot_func(prop_mod, xvals)
+	#polygon(c(xvals, rev(xvals)), c(ypred[,1], rev(ypred[,3])), col=mycol_trans[i], border=NA)
+	lines(xvals, ypred[,2], lwd=3, col=mycol[i], lty=mylty[signif+1])
 }	
 dev.off()
 
