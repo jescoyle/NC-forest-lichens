@@ -134,7 +134,7 @@ calc_trait_div = function(x, N=NA, Group, vartype){
 # reps :  number of randomizations
 # see other parameters above
 calc_trait_div_null = function(reps, x, N, Group, vartype){
-	null_dist = sapply(1:reps, function(i){
+	sapply(1:reps, function(i){
 		neworder = sample(x, length(x), replace=F)
 		newvals = calc_trait_div(neworder, N, Group, vartype)
 		return(newvals)

@@ -16,6 +16,10 @@ plots_pm = subset(plot_data, SiteID!='Bladen')
 samples_pm = subset(samples, SiteID!='Bladen')
 samples_pm = droplevels(samples_pm)
 
+# Color ramp
+blue2red = apply(read.csv('../../blue2red_10colramp.txt'), 1, function(x) rgb(x[1],x[2],x[3],maxColorValue=255))
+blue2red = rev(blue2red)
+
 
 ################################################################
 ### Check co-variance between environmental predictors
@@ -154,10 +158,8 @@ library(MuMIn)
 
 ###########################################
 #### Water traits ~ water availability ####
-# Focal traits: P(crustose), P(fruticose), P(cilia|foliose), Attachment, LobeDissect
+# Focal traits: P(crustose), P(fruticose), P(cilia|foliose), Photobiont, Attachment, LobeDissect
 # Focal predictors: Sample: WaterCapacity, Bryophytes  Plot: CloudFreq_mean, VPD_max, OpenPos 
-
-
 
 ## Binary Traits
 
@@ -178,6 +180,10 @@ cilia_pres = cilia_pres[cilia_pres[,2]>0,] # Drop samples without foliose lichen
 cilia_abun = xtabs(AbunCount~SampID + Cilia, data=lichens_pm)
 cilia_abun = cbind(cilia_abun[,1], rowSums(cilia_abun))
 cilia_abun = cilia_abun[cilia_abun[,2]>0,]
+
+# Create response variable for P(cyanobacteria)
+cyano_abun = xtabs(AbunCount ~ SampID + Photobiont, data=lichens_pm)
+cyano_abun = cbind(cyano_abun[,'cyano'], rowSums(cyano_abun))
 
 # Calculate sample-mean traits for numeric traits
 # Create relative presence/abundance community data matrices
@@ -250,7 +256,7 @@ for(i in c(pred_vars1, pred_vars2)) hist(unclass(Xdata[,i]), main=i)
 
 
 # Set response variable
-Y = cilia_abun
+Y = cyano_abun # crust_abun, frut_abun, cilia_abun, cyano_abun
 
 mods = vector('list', length(pred_vars1)*length(pred_vars2))
 dim(mods) = c(length(pred_vars1),length(pred_vars2))
@@ -323,6 +329,8 @@ for(j in pred_vars2){
 #frut_mods = mods
 #cilia_ests = ests
 #cilia_mods = mods
+#cyano_ests = ests
+#cyano_mods = mods
 
 ## Numeric variables
 Y = sampXtrait_abun[,'Attachment']
@@ -395,21 +403,21 @@ for(j in pred_vars2){
 #dissect_mods = mods
 #dissect_ests = ests
 
-save(crust_ests, crust_mods, frut_ests, frut_mods, cilia_ests, cilia_mods,
+save(crust_ests, crust_mods, frut_ests, frut_mods, cilia_ests, cilia_mods, cyano_ests, cyano_mods,
 	attach_ests, attach_mods, dissect_ests, dissect_mods, file='water_trait_abun_models.RData')
 
 load('water_trait_abun_models.RData')
 
 
 ## Make summary tables
-parm_list = list(crust_ests, frut_ests, cilia_ests, attach_ests, dissect_ests)
-names(parm_list) = c('ProbCrustose','ProbFruticose','Cilia','Attachment','LobeDissect')
+parm_list = list(cyano_ests, crust_ests, frut_ests, cilia_ests, attach_ests, dissect_ests)
+names(parm_list) = c('ProbCyano','ProbCrustose','ProbFruticose','Cilia','Attachment','LobeDissect')
 
 # Combine all estimates into a big array
 library(abind)
 library(plyr)
 
-all_ests = abind(crust_ests, frut_ests, cilia_ests, attach_ests, dissect_ests, along=0.5, new.names=names(parm_list))
+all_ests = abind(cyano_ests, crust_ests, frut_ests, cilia_ests, attach_ests, dissect_ests, along=0.5, new.names=names(parm_list))
 names(dimnames(all_ests)) = c('trait','pred.samp','pred.plot','parm','quant')
 
 ## Use corrplot to plot coef estimates
@@ -426,8 +434,9 @@ inter = acast(molten, trait~pred.samp+pred.plot~quant, subset=.(parm=='b1X2' & q
 # Marginal effects of sample controlling for climate
 tab = acast(molten, trait~pred.samp+pred.plot~quant, subset=.(parm=='b12' & quant%in%c('est','P','low95','up95')))
 
-svg('./Figures/water_traits_marginal_effects_bark.svg', height=5, width=5)
-par(mar=c(0,0,0,0))
+svg('./Figures/water_traits_marginal_effects_bark.svg', height=7.5, width=5)
+par(mar=c(.5,0,.5,0))
+par(oma=c(0,2,0,0))
 par(mfrow=dim(tab)[1:2])
 
 for(i in 1:dim(tab)[1]){
@@ -446,7 +455,7 @@ for(j in 1:dim(tab)[2]){
 		bg=ifelse(tab[i,j,'P']<0.05, ifelse(inter[i,j,'P']>=0.05, 'black', use_col[(inter[i,j,'est']>0)+1]),'white'),
 		col=ifelse(inter[i,j,'P']>=0.05, 'black', use_col[(inter[i,j,'est']>0)+1]))
 	if(j %in% c(1,4)) axis(2, line=-2, las=1)
-	
+	if(j==1) mtext(dimnames(tab)[[1]][i], 2, 1)
 }}
 dev.off()
 
@@ -454,8 +463,9 @@ dev.off()
 tab = acast(molten, trait~pred.plot+pred.samp~quant, subset=.(parm=='b21' & quant%in%c('est','P','low95','up95')))
 inter = acast(molten, trait~pred.plot+pred.samp~quant, subset=.(parm=='b1X2' & quant%in%c('est','P')))
 
-svg('./Figures/water_traits_marginal_effects_climate.svg', height=5, width=5)
-par(mar=c(0,0,0,0))
+svg('./Figures/water_traits_marginal_effects_climate.svg', height=7.5, width=5)
+par(mar=c(.5,0,.5,0))
+par(oma=c(0,2,0,0))
 par(mfrow=dim(tab)[1:2])
 
 for(i in 1:dim(tab)[1]){
@@ -476,20 +486,22 @@ for(j in 1:dim(tab)[2]){
 		col=ifelse(inter[i,j,'P']>=0.05, 'black', use_col[(inter[i,j,'est']>0)+1]))
 
 	if(j %in% c(1,3,5)) axis(2, line=-2, las=1)
+	if(j==1) mtext(dimnames(tab)[[1]][i], 2, 1)
 	
 }}
 dev.off()
 
 
 # Explanatory ability of models
-bark_tab = dcast(molten, trait+pred.samp~quant, subset=.(parm=='b1' & pred.plot=='VPD_max'))
+bark_tab = dcast(molten, trait+pred.samp~quant, subset=.(parm=='b1' & pred.plot=='VPD_max')) # Doesn't matter which pred.plot specified
 subset(bark_tab, P < 0.05)
-clim_tab = dcast(molten, trait+pred.plot~quant, subset=.(parm=='b2' & pred.samp=='Bryophytes'))
+clim_tab = dcast(molten, trait+pred.plot~quant, subset=.(parm=='b2' & pred.samp=='Bryophytes')) # Doesn't matter which pred.samp specified
 subset(clim_tab, P < 0.05)
 
 # Are there significantly different effect of bark scale variables across Ecoregions?
 all_ests[,,'CloudFreq_mean','b1Xeco',c('est','P')] 
-# only for the effect of Bryophytes on Attachment: more positive effect of bryophytes on thallus height in Piedmont (drier)
+# for the effect of Bryophytes on Attachment: more positive effect of bryophytes on thallus height in Piedmont (drier)
+# for the effects of WHC and Bryophytes on prob. cyano: more positive effects in Piedmont (drier)
 
 # Explore interactions
 # Do any models have a significant interaction between bark and plot scale variables?
@@ -519,7 +531,7 @@ curve(mod_func(x=0, level=x), from=climrange[1], to=climrange[2], add=T, lwd=2, 
 curve(mod_func(x=5, level=x), from=climrange[1], to=climrange[2], add=T, lwd=2, col=use_col[2])
 
 
-## Figure 2: Attachment vs. Bryophytes with interactions
+## Figure 1: Attachment vs. Bryophytes with interactions
 use_col = c('#0000CD','#CD0000') # 'blue3', 'red3'
 use_col_trans = paste(use_col, '88', sep='')
 j='VPD_max'
@@ -535,16 +547,18 @@ mod = attach_mods['Bryophytes',j][[1]]
 pred_high = mod_func(xvals, max(mod$model$env2))
 pred_low = mod_func(xvals, min(mod$model$env2))
 
-svg('./Figures/attachment_bryophyte_VPD.svg', height=4, width=4)
+svg('./Figures/attachment_bryophyte_VPD.svg', height=4, width=4.5)
 par(mar=c(4,4,1,1))
 par(lend=1)
 
-plot(yvals~Xdata[names(yvals), 'Bryophytes'], las=1, ylab='Attachment', xlab='Bryophyte Cover', pch=16, col='#00000050')
+plot(yvals~Xdata[names(yvals), 'Bryophytes'], las=1, ylab='Attachment', xlab='Bryophyte Cover', pch=16, col='#00000050', axes=F)
 polygon(c(xvals, rev(xvals)), c(pred_low[,1], rev(pred_low[,3])), col=use_col_trans[1], border=NA)
 polygon(c(xvals, rev(xvals)), c(pred_high[,1], rev(pred_high[,3])), col=use_col_trans[2], border=NA)
 lines(xvals, pred_low[,2], lwd=3, col=use_col[1])
 lines(xvals, pred_high[,2], lwd=3, col=use_col[2])
-
+axis(1, at=0:5, labels=c('none','minute','few','several','many', 'covered'))
+axis(2, las=1)
+box()
 dev.off()
 
 ## Plot single effects of env vars on traits~quant
@@ -554,8 +568,8 @@ tab = rbind(bark_tab, clim_tab)
 tab = tab[order(tab$trait),]
 tab[order(tab$R2, decreasing=T),]
 
-trait_order = c('ProbCrustose','ProbFruticose','Attachment','LobeDissect','Cilia')
-trait_names = c('Crustose','Fruticose','Attachment','Lobe dissection','Cilia')
+trait_order = c('ProbCyano','ProbCrustose','ProbFruticose','Attachment','LobeDissect','Cilia')
+trait_names = c('Cyanolichen','Crustose','Fruticose','Attachment','Lobe dissection','Cilia')
 names(trait_names) = trait_order
 pred_order = c('WaterCapacity','Bryophytes','CloudFreq_mean','VPD_max','OpenPos')
 pred_names = c('WHC','Bryo','Cloud','VPD','Open')
@@ -571,6 +585,23 @@ eff_df$pred = pred_names_long[as.character(eff_df$pred)]
 eff_df$CI = with(eff_df, paste('(',round(low95, 3),', ', round(up95, 3),')', sep=''))
 eff_df[,c('P','R2','est')] = round(eff_df[,c('P','R2','est')], 3)
 write.table(eff_df[,c('trait','pred','est','CI','P','R2')], './Figures/water traits vs env ests.txt', sep='\t', quote=F, row.names=F)
+
+# Write out table with significant interactions
+inter = acast(molten, trait~pred.plot+pred.samp~quant, subset=.(parm=='b1X2' & quant%in%c('est','low95','up95','P')))
+inter_molten = melt(inter)
+inter_tab = dcast(inter_molten, Var1 + Var2 ~ Var3)
+inter_df = data.frame(trait=inter_tab$Var1)
+inter_df$pred = sapply(inter_tab$Var2, function(x){
+	getvars = names(which(sapply(pred_order, function(y) grep(y, x))==1))
+	paste(pred_names_long[getvars], collapse=' x ')	
+})
+inter_df$est = round(inter_tab$est, 3)
+inter_df$CI = with(inter_tab, paste('(',round(low95, 3),', ', round(up95, 3),')', sep=''))
+inter_df$P = round(inter_tab$P, 3)
+write.table(inter_df, './Figures/water traits vs env interactions.txt', sep='\t', quote=F, row.names=F)
+write.table(subset(inter_df, P < 0.05), './Figures/water traits vs env sig interactions.txt', sep='\t', quote=F, row.names=F)
+
+
 
 # Grouped by Trait
 svg('./Figures/water traits vs env grp by trait.svg', height=6, width=2.5)
@@ -1150,7 +1181,7 @@ asex_abun = reproduction_pm[,c('Asex_abun','N')]
 
 # Make table of predictors
 scale_vars = c('SampID','PlotID','SiteID','Ecoregion')
-Xdata = merge(reproduction_pm[,c('SampID','N','S')], samples[,c('Bryophytes',scale_vars,'TreeTaxonID')], all.x=T)
+Xdata = merge(reproduction_pm[,c('SampID','N','S')], samples[,c('DBH','Bryophytes',scale_vars,'TreeTaxonID')], all.x=T)
 rownames(Xdata) = Xdata$SampID
 
 # Convert Bryophytes to integer
@@ -1301,6 +1332,10 @@ mtext(mylabel1, 3, 0, adj=1)
 mtext(mylabel2, 3, 0, adj=0)
 dev.off()
 
+# Change with tree size?
+
+
+
 ### Attachment
 
 Y = sampXtrait_abun[,'Attachment'] # Make sure this is log-transformed from above
@@ -1405,16 +1440,13 @@ mod_func = function(mod, x, PID=NA, logT=F){
 }
 
 # Remake data tables
-Xdata = merge(reproduction_pm[,c('SampID','N','S')], samples[,c('Bryophytes', scale_vars,'TreeTaxonID')], all.x=T)
+Xdata = merge(reproduction_pm[,c('SampID','N','S')], samples[,c('DBH', 'Bryophytes', scale_vars,'TreeTaxonID')], all.x=T)
 Xdata$N = Xdata$N/9
 rownames(Xdata) = Xdata$SampID
 Xdata$Bryophytes = unclass(Xdata$Bryophytes) - 1
 
 # Color by trait diversity z-scores:
 load('trait_diversity.RData')
-blue2red = apply(read.csv('../../blue2red_10colramp.txt'), 1, function(x) rgb(x[1],x[2],x[3],maxColorValue=255))
-blue2red = rev(blue2red)
-
 
 pdf('./Figures/total abun and bryo vs attachment and crustose color by z-score.pdf', height=5, width=7.5)
 layout(matrix(1:6, nrow=2, byrow=T), widths=c(0.45, 0.45, 0.1))
@@ -1522,6 +1554,115 @@ axis(4, las=1)
 
 dev.off()
 
+
+### Succession?
+
+Xdata$DBH = Xdata$DBH/10
+
+# PropCrustose
+Y = as.matrix(crust_abun) # asex_abun
+yvals = Y[,1]/Y[,2]
+mod_dbh = glmer(Y ~ DBH + (1|PlotID), data=Xdata[rownames(Y),], family='binomial')
+mod_crust = mod_dbh
+plot(yvals ~ I(Xdata$DBH*10))
+
+# PropFoliose - decreases in most plots
+Y = cbind(form_abun[,'foliose'], rowSums(form_abun))
+yvals = Y[,1]/Y[,2]
+mod_dbh1 = glmer(Y ~ DBH + (1|PlotID), data=Xdata[rownames(Y),], family='binomial')
+mod_dbh2 = glmer(Y ~ DBH + (DBH|PlotID), data=Xdata[rownames(Y),], family='binomial')
+anova(mod_dbh1, mod_dbh2)
+effs = exp(coef(mod_dbh2)$PlotID)$DBH - 1
+effs[order(effs)]
+coef(mod_dbh2)$PlotID[order(effs),]
+mod_fol = mod_dbh2
+
+# PropFruticose - increases by 19% every 10cm
+Y = cbind(form_abun[,'fruticose'], rowSums(form_abun))
+yvals = Y[,1]/Y[,2]
+mod_dbh1 = glmer(Y ~ DBH + (1|PlotID), data=Xdata[rownames(Y),], family='binomial')
+mod_dbh2 = glmer(Y ~ DBH + (DBH|PlotID), data=Xdata[rownames(Y),], family='binomial')
+anova(mod_dbh1, mod_dbh2)
+summary(mod_dbh1)
+exp(coef(mod_dbh1)$PlotID)
+mod_frut = mod_dbh1
+
+# Attachment - no change
+Y = sampXtrait_abun[,'Attachment'] # Make sure this is log-transformed from above
+mod_dbh = lmer(Y ~ DBH + (1|PlotID), data=Xdata[names(Y),])
+
+# Bryophytes - usually increase
+Y = cbind(Xdata$Bryophytes, 5)
+mod_dbh1 = glmer(Y ~ DBH + (1|PlotID), data=Xdata, family='binomial')
+mod_dbh2 = glmer(Y ~ DBH + (DBH|PlotID), data=Xdata, family='binomial')
+anova(mod_dbh1, mod_dbh2)
+mod_bryo = mod_dbh2
+effs = exp(coef(mod_dbh2)$PlotID)$DBH - 1
+effs[order(effs)]
+coef(mod_dbh2)$PlotID[order(effs),]
+
+
+## Plot how growth forms and Bryophyte abundance predicted to change with DBH
+use_col = c('slateblue','firebrick1','darkorange','grey30')
+dbh_vals = sapply(unique(samples_pm$PlotID), function(x){
+	use_data = subset(Xdata, PlotID==x)
+	range(use_data$DBH)
+})
+dbh_vals = t(dbh_vals); rownames(dbh_vals)=unique(samples_pm$PlotID)
+
+
+pdf('./Figures/growth form and bryos vs DBH.pdf', height=6, width=4)
+par(mfrow=c(2,1))
+par(mar=c(.5,4,1.5,.5))
+par(oma=c(4,0,0,0))
+
+plot(0,0, xlim=c(0, max(samples_pm$DBH)), ylim=c(0,1), type='n', xlab='', ylab='Proportion',axes=F)
+axis(2, las=1)
+axis(1, at=seq(0, 80, 10), labels=rep('', 9))
+box()
+
+# Crustose
+for(i in unique(samples_pm$PlotID)){
+	xvals = seq(dbh_vals[i,1], dbh_vals[i,2], length.out=100)
+	yvals = predict(mod_crust, data.frame(DBH=xvals, PlotID=i), type='response')
+	lines(xvals*10, yvals, col=use_col[1], lwd=1)
+}
+
+# Foliose
+for(i in unique(samples_pm$PlotID)){
+	xvals = seq(dbh_vals[i,1], dbh_vals[i,2], length.out=100)
+	yvals = predict(mod_fol, data.frame(DBH=xvals, PlotID=i), type='response')
+	lines(xvals*10, yvals, col=use_col[2], lwd=1)
+}
+
+# Fruticose
+for(i in unique(samples_pm$PlotID)){
+	xvals = seq(dbh_vals[i,1], dbh_vals[i,2], length.out=100)
+	yvals = predict(mod_frut, data.frame(DBH=xvals, PlotID=i), type='response')
+	lines(xvals*10, yvals, col=use_col[3], lwd=1)
+}
+legend('topright', c('Crustose','Foliose','Fruticose'), col=use_col, lty=1,bty='n')
+mtext('Proportion', 2, 3)
+mtext('A. Growth form', 3,0, adj=0)
+
+# Bryophytes
+plot(0,0, xlim=c(0, max(samples_pm$DBH)), ylim=c(0,1), type='n', xlab='Tree DBH (cm)', ylab='', axes=F)
+axis(1, at=seq(0, 80, 10))
+axis(2, at=seq(0,1, length.out=6), labels=c('none','minute','few','several','many','covered'), las=1)
+box()
+for(i in unique(samples_pm$PlotID)){
+	xvals = seq(dbh_vals[i,1], dbh_vals[i,2], length.out=100)
+	yvals = predict(mod_bryo, data.frame(DBH=xvals, PlotID=i), type='response')
+	lines(xvals*10, yvals, col=use_col[4], lwd=1)
+}
+
+mtext('B. Bryophyte cover', 3, 0, adj=0)
+mtext('Tree DBH (cm)', 1, 2.5)
+
+dev.off()
+
+plot(Y, rank(Y))
+plot(yvals, rank(yvals))
 ################################################################################
 ### Trait Diversity ###
 
@@ -1605,6 +1746,8 @@ trait_div[,'PropAsex','Obs'] = rep_prop[dimnames(trait_div)[[1]],'asexual']
 
 save(trait_div, file='trait_diversity.RData')
 
+load('trait_diversity.RData')
+
 ## Convergence in water/competitive traits?
 use_traits = c('Attachment','LobeDissect','Form','PropCrust','PropFrut')
 use_env = c('WaterCapacity','Bryophytes','CloudFreq_mean','VPD_max','OpenPos')
@@ -1686,7 +1829,7 @@ colorby = (trait_div[,'Attachment','P'] < 0.05) + 1
 yvals = trait_div[,'Attachment','Z']
 plot(yvals ~ reproduction[samp_order,'N'], 
 	pch=16, col=use_col[colorby], xlab=expression(N[TOT]), ylab='', las=1)
-mtext('A',3,0,adj=0)
+#mtext('A',3,0,adj=0)
 mtext('z-score', 2, 2, cex=.8)
 abline(h=c(-1.96,0,1.96), lty=2, col='grey30')
 
@@ -1695,14 +1838,14 @@ plot(yvals ~ as.numeric(samples_pm[samp_order,'Bryophytes']),
 abline(h=c(-1.96,0,1.96), lty=2, col='grey30')
 axis(1, at=1:6, labels=levels(samples$Bryophytes))
 box()
-mtext('B',3,0,adj=0)
+#mtext('B',3,0,adj=0)
 
 plot(yvals ~ samples_pm[samp_order,'VPD_max'], 
-	pch=16, col=use_col[colorby], xlab='VPD', ylab='', las=1, axes=F)
+	pch=16, col=use_col[colorby], xlab='VPD (Pa)', ylab='', las=1, axes=F)
 abline(h=c(-1.96,0,1.96), lty=2, col='grey30')
-axis(1, at=8:17)
+axis(1, at=seq(8,17,2), labels=seq(8,17,2)*100)
 box()
-mtext('C',3,0,adj=0)
+#mtext('C',3,0,adj=0)
 
 dev.off()
 
@@ -1711,16 +1854,19 @@ pdf('./Figures/lobe dissect diversity vs env.pdf', height=3.5, width=3.5)
 par(mar=c(4.1,4.1,.5,.5))
 colorby = (trait_div[,'LobeDissect','P'] < 0.05) + 1
 plot(trait_div[,'LobeDissect','Z']~ samples_pm[samp_order,'VPD_max'], 
-	pch=16, col=use_col[colorby], xlab='VPD', ylab='z-score', las=1)
+	pch=16, col=use_col[colorby], xlab='VPD (Pa)', ylab='z-score', axes=F)
+axis(1, at=seq(8,17,2), labels=seq(8,17,2)*100)
+axis(2, las=1)
+box()
 abline(h=c(-1.96,0,1.96), lty=2, col='grey30')
 dev.off()
 
 # Form, PropCrust, PropFrut ~ N, Bryophytes, VPD
 # Make sure to load use_data from above
-use_traits = c('Form','PropCrust','Prop)
+use_traits = c('Form','PropCrust','PropFrut')
 use_ynames = c('Growth form diversity','Prop. crustose','Prop. fruticose')
 use_env = c('N','Bryophytes','VPD_max')
-use_xnames=c('N[TOT]','Bryophyte~~cover','VPD')
+use_xnames=c('N[TOT]','Bryophyte~~cover','VPD~~(Pa)')
 
 pdf('./Figures/growth form diversity vs env.pdf', height=7.8, width=7.8)
 par(mfrow=c(3,3))
@@ -1741,7 +1887,7 @@ for(i in 1:3){
 			mtext(parse(text=use_xnames[j]), 1, 3)
 			if(j==1) axis(1)
 			if(j==2) axis(1, at=1:6, labels=levels(use_data$Bryophytes))
-			if(j==3) axis(1, at=8:17)
+			if(j==3) axis(1, at=seq(8,17,2), labels=seq(8,17,2)*100)
 		}
 }}
 dev.off()
@@ -2041,6 +2187,9 @@ plot(N_avg~N_tot, data=samples_pm)
 plot(N_tot~DBH, data=samples_pm, log='x')
 plot(N_tot~Trans_tot_cor, data=samples_pm)
 plot(N_tot~ Elevation, data=samples_pm)
+plot(N_tot ~ Bryophytes, data=samples_pm, pch=16, col='#00000050')
+mod = glm(N_tot ~ Bryophytes, data=samples_pm, family='poisson')
+mod = glm(N_tot ~ VPD_max, data=samples_pm, family='poisson')
 
 # Covariates 
 bark_covars = c('FurrowDepth','Bryophytes','pH','Shedding','Density','Angle')
@@ -2169,7 +2318,56 @@ curve(mod_func(x), add=T, lwd=4)
 
 dev.off()
 
+## How do these tree species differ?
+use_order = with(samples_pm, tapply(Shedding, TreeTaxonID, mean))
+use_order = names(use_order[order(use_order)])
+sp_labs = gsub('_', ' ', use_order)
 
+pdf('./Figures/tree species shedding.pdf', height=6, width=10)
+par(mar=c(10,4,3,.5))
+plot(Shedding ~ as.numeric(factor(TreeTaxonID, levels=use_order)), data=samples_pm, axes=F, 
+	xlab='', ylab='Bark instability', pch=15, col='#00000050')
+axis(1, at=1:length(use_order), labels=sp_labs, las=2, col=1:2)
+axis(2, at=1:5, labels=c('none','attached\nflakes','loose\nflakes','slight\npeeling','peeling'))
+axis(3, at=1:length(use_order), labels=treefreq[use_order], las=2)
+for(i in 1:length(use_order)){
+	if(treefreq[use_order[i]] < 10){ abline(v=i, col='grey', lty=2) } else {
+		use_obs = scaled_data$TreeTaxonID==use_order[i]
+		mod = glm(N_tot ~ DBH, family='poisson', data=scaled_data[use_obs,])
+		mod0 = glm(N_tot ~ 1, family='poisson', data=scaled_data[use_obs,])
+		sig = anova(mod0, mod, test='Chisq')[2,'Pr(>Chi)'] < 0.05
+		sign = coef(mod)['DBH'] < 0
+		
+		if(!sig) abline(v=i, col='grey')
+		if(sig) abline(v=i, col=c('blue','red')[sign+1])
+	}
+}
+dev.off()
+
+# Interaction between DBH and Shedding?
+mod_inter = glm(N_tot ~ DBH*Shedding, data=samples_pm, family='poisson')
+
+plot(Shedding ~ DBH, data=samples_pm)
+use_col = colorRampPalette(blue2red[2:9])(5)
+
+pdf('./Figures/lichen abun vs DBH with Shedding.pdf', height=4, width=4.5)
+par(lend=1)
+par(mar=c(4.5, 4, .5, .5))
+plot(N_tot ~ DBH, data=samples_pm, pch=16, col='#00000050', xlab='DBH (cm)', ylab=expression(N[TOT]), las=1)
+#mod_func = function(x,i) predict(mod_inter, data.frame(DBH=x, Shedding=i), type='response')
+for(i in c(1:3,5)){
+	this_data = subset(samples_pm, Shedding==i)
+	DBH_range = range(this_data$DBH)
+	this_mod = glm(N_tot ~ DBH, data=this_data, family='poisson')
+	pval = 
+
+	mod_func = function(x) predict(this_mod, data.frame(DBH=x), type='response')
+	curve(mod_func(x), from=DBH_range[1], to=DBH_range[2], col='black', add=T, lwd=5)
+	curve(mod_func(x), from=DBH_range[1], to=DBH_range[2], col=use_col[i], add=T, lwd=3)
+}
+legend('topright', c('none','attached flakes','loose flakes','peeling'), 
+	col=use_col[c(1:3, 5)], lwd=3, bty='n')
+dev.off()
 
 ## How does successively decreasing tree sizes affect coef estimate for DBH?
 sm_mods = sapply(4:max(use_data$DBH), function(thresh){
@@ -2684,6 +2882,42 @@ for(treesp in tree_taxa){
 mtext('Tree Diameter (cm)',1,1,outer=T, adj=.6)
 mtext('Lichen Abundance',2,1,outer=T)
 dev.off()
+
+###############################################################
+### SEM
+
+library(lavaan)
+
+# Define model
+attach_sem = '
+
+# Cloud freq -> Bryophyte + Attachment
+Bryophytes + Attachment + N_tot ~ CloudFreq_mean
+
+# Bryophytes -> Attachment
+Attachment ~ Bryophytes
+
+# Bryophytes -> N_tot
+#N_tot ~ Bryophytes
+
+# N -> Attachment
+Attachment ~ N_tot
+
+'
+
+# Define data
+# Make sure sampXtrait_abun is created in code above and log-transformed
+model_data = data.frame(Attachment = sampXtrait_abun[,'Attachment'], samples_pm[rownames(sampXtrait_abun),])
+
+
+sem_mod = sem(attach_sem, data=model_data, estimator='ML', se='robust')
+summary(sem_mod, standardized=T, rsq=TRUE, fit.measures=T)
+semPaths(sem_mod, 'std', intercepts=F)
+
+
+
+
+
 
 
 ################################################################
